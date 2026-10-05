@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Interior Studio 室內設計工作室</title>
+  <meta name="description" content="免費開源的網頁室內設計工具：2D 平面圖即時生成 3D 透視圖，拖拉擺放家具門窗，並可依風格模板 AI 自動設計。" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232563eb'/%3E%3Cpath d='M7 15 16 8l9 7v9H7z' fill='none' stroke='white' stroke-width='2.4' stroke-linejoin='round'/%3E%3Crect x='13.5' y='17' width='5' height='7' fill='white'/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="css/app.css" />
+  <script type="importmap">
+    { "imports": { "three": "./vendor/three/three.module.min.js" } }
+  </script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo" aria-hidden="true"></span>
+      <div>
+        <strong>Interior Studio</strong>
+        <small>室內設計工作室</small>
+      </div>
+    </div>
+
+    <div class="menu" id="fileMenu">
+      <button class="btn" data-menu-toggle>檔案 ▾</button>
+      <div class="menu-pop">
+        <button data-action="new">新專案</button>
+        <div class="menu-sub-title">範例平面圖</div>
+        <div id="sampleList"></div>
+        <hr />
+        <button data-action="open">開啟專案檔（.json）</button>
+        <button data-action="save">儲存專案檔</button>
+        <hr />
+        <button data-action="importBg">匯入平面圖底圖（描圖用）</button>
+        <button data-action="calibrate">校正底圖比例</button>
+        <button data-action="removeBg">移除底圖</button>
+        <hr />
+        <button data-action="export2d">匯出 2D 平面圖 PNG</button>
+        <button data-action="export3d">匯出 3D 透視圖 PNG</button>
+      </div>
+    </div>
+
+    <div class="group">
+      <button class="icon-btn" data-action="undo" title="復原 (Ctrl+Z)">↶</button>
+      <button class="icon-btn" data-action="redo" title="重做 (Ctrl+Y)">↷</button>
+    </div>
+
+    <div class="group tools" id="tools">
+      <button class="tool active" data-tool="select" title="選取／移動 (V)">⬚ <span>選取</span></button>
+      <button class="tool" data-tool="wall" title="畫牆 (W)：點擊連續畫牆，雙擊或右鍵結束">▭ <span>畫牆</span></button>
+      <button class="tool" data-tool="room" title="矩形房間 (R)：拖曳建立含牆的房間；在封閉牆內單擊可自動偵測房間">▣ <span>房間</span></button>
+      <button class="tool" data-tool="polygon" title="多邊形地板 (P)">⬠ <span>多邊形</span></button>
+      <button class="tool" data-tool="dim" title="量尺 (D)">↔ <span>量尺</span></button>
+      <button class="tool" data-tool="pan" title="平移 (H)">✥ <span>平移</span></button>
+      <button class="btn ghost" data-action="detectAll" title="依牆體自動找出所有封閉房間">自動偵測房間</button>
+    </div>
+
+    <div class="spacer"></div>
+
+    <div class="group seg" id="viewSeg">
+      <button data-view="2d">2D</button>
+      <button data-view="split" class="active">分割</button>
+      <button data-view="3d">3D</button>
+    </div>
+    <button class="btn primary" data-action="openAI">✦ AI 風格設計</button>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar left" id="leftPanel">
+      <nav class="tabs" id="leftTabs">
+        <button data-tab="furniture" class="active">家具</button>
+        <button data-tab="openings">門窗</button>
+        <button data-tab="materials">材質</button>
+        <button data-tab="ai">AI 風格</button>
+      </nav>
+      <section class="tab-body" data-body="furniture">
+        <input type="search" id="catalogSearch" placeholder="搜尋家具…" />
+        <div class="chips" id="catChips"></div>
+        <div class="cards" id="furnitureCards"></div>
+        <p class="hint">拖曳到 2D 或 3D 畫面放置，或點一下後在平面圖上點擊放置（按住 Shift 可連續放置）。</p>
+      </section>
+      <section class="tab-body" data-body="openings" hidden>
+        <div class="cards" id="openingCards"></div>
+        <p class="hint">門窗需放在牆上，會自動吸附到最近的牆面；選取後可調整寬高、窗台高度與開門方向。</p>
+      </section>
+      <section class="tab-body" data-body="materials" hidden>
+        <h4>地坪</h4>
+        <div class="swatches" id="floorSwatches"></div>
+        <h4>牆面</h4>
+        <div class="swatches" id="wallSwatches"></div>
+        <p class="hint">點選材質套用到目前選取的房間地板或牆面；也可以直接拖曳到 3D 畫面中的牆面或地板。</p>
+      </section>
+      <section class="tab-body" data-body="ai" hidden>
+        <div id="aiPanel"></div>
+      </section>
+    </aside>
+
+    <main class="views mode-split" id="views">
+      <div class="view view-2d" id="view2d">
+        <canvas id="planCanvas"></canvas>
+        <div class="view-label">2D 平面圖</div>
+        <div class="view-tools">
+          <button class="icon-btn" data-action="zoomIn" title="放大">＋</button>
+          <button class="icon-btn" data-action="zoomOut" title="縮小">－</button>
+          <button class="icon-btn" data-action="fit" title="全部顯示">⤢</button>
+        </div>
+        <div class="tool-hint" id="toolHint"></div>
+      </div>
+      <div class="view view-3d" id="view3d">
+        <div class="view-label">3D 透視圖</div>
+        <div class="view-tools">
+          <button class="icon-btn" data-action="resetView" title="重設視角">⟲</button>
+          <button class="icon-btn" data-action="topView" title="俯視">⊙</button>
+          <button class="btn small" data-action="walk" id="walkBtn" title="第一人稱漫遊">◉ 漫遊</button>
+          <button class="btn small" data-action="night" id="nightBtn" title="切換日夜光線">☀ 日間</button>
+          <button class="btn small" data-action="cutaway" id="cutBtn" title="把牆降到 120 cm，方便俯瞰配置">矮牆</button>
+          <button class="btn small" data-action="ceiling" id="ceilBtn" title="顯示天花板">天花板</button>
+        </div>
+        <div class="walk-help" id="walkHelp" hidden>W A S D 移動 · 拖曳滑鼠環顧 · Q / E 轉向 · Shift 加速 · Esc 離開</div>
+      </div>
+    </main>
+
+    <aside class="sidebar right" id="rightPanel">
+      <div id="props"></div>
+    </aside>
+  </div>
+
+  <footer class="statusbar">
+    <span id="statusCoords">x: 0 · y: 0 cm</span>
+    <span id="statusInfo"></span>
+    <span class="grow"></span>
+    <label><input type="checkbox" id="snapToggle" checked /> 吸附</label>
+    <label><input type="checkbox" id="gridToggle" checked /> 格線</label>
+    <a href="https://github.com/chenyu0502/interior_decoration" target="_blank" rel="noopener">開源專案</a>
+  </footer>
+
+  <div class="modal" id="reportModal" hidden>
+    <div class="modal-card">
+      <header>
+        <h2 id="reportTitle">AI 設計建議書</h2>
+        <button class="icon-btn" data-close>✕</button>
+      </header>
+      <div class="modal-body" id="reportBody"></div>
+    </div>
+  </div>
+
+  <input type="file" id="fileOpen" accept=".json,application/json" hidden />
+  <input type="file" id="fileBg" accept="image/*" hidden />
+  <div class="toasts" id="toasts"></div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
