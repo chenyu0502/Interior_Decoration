@@ -386,9 +386,10 @@ class App {
         <div class="field"><label>位置 x / y</label><div class="row"><input type="number" data-k="x" value="${Math.round(o.x)}"><input type="number" data-k="y" value="${Math.round(o.y)}"></div></div>
         <div class="field"><label>離地高度</label><input type="number" data-k="elev" value="${o.elev || 0}"></div>
         <div class="field"><label>旋轉 °</label><div class="row"><input type="number" data-k="rot" value="${Math.round(o.rot || 0)}"><button class="btn small" data-act="rot90">↻90°</button></div></div>
+        <div class="field"><label>左右翻轉</label><div class="row"><button class="btn small ${o.mirror ? 'on' : ''}" data-act="mirror" title="左右鏡像（M），例如流理台水槽與爐具互換">⇆ ${o.mirror ? '已翻轉' : '翻轉'}</button></div></div>
         ${(def.roles || []).map((r, i) => `<div class="field"><label>${roleNames[r] || r}</label><div class="row"><input type="color" data-k="${i ? 'color2' : 'color'}" value="${(i ? o.color2 : o.color) || pal[r] || '#cccccc'}"><button class="btn small" data-act="resetColor${i}" title="恢復風格預設">↺</button></div></div>`).join('')}
         <div class="btn-row"><button class="btn" data-act="dup">複製 (Ctrl+D)</button><button class="btn danger" data-act="del">刪除 (Del)</button></div>
-        <p class="hint">拖曳靠近牆面會自動貼齊（按住 Alt 可取消磁吸）。方向鍵微調位置、R 鍵旋轉 90°。</p></div>`;
+        <p class="hint">拖曳靠近牆面會自動貼齊（按住 Alt 可取消磁吸）。方向鍵微調位置、R 鍵旋轉 90°、M 鍵左右翻轉。</p></div>`;
     } else if (sel.type === 'wall') {
       const L = Math.round(wallLength(o));
       const pick = (side) => `<div class="mat-pick">${MATERIALS.filter((m) => m.cat !== 'floor').map((m) => `<img title="${esc(m.name)}" data-side="${side}" data-mat="${m.id}" class="${o[side === 'A' ? 'matA' : 'matB'] === m.id ? 'current' : ''}" src="${materialSwatchURL(m.id)}">`).join('')}</div>`;
@@ -479,6 +480,7 @@ class App {
         if (act === 'del') this.deleteSelection();
         else if (act === 'dup') this.duplicate();
         else if (act === 'rot90') this.rotateSelection(90);
+        else if (act === 'mirror') this.mirrorSelection();
         else if (act === 'resetColor0' || act === 'resetColor1') store.commit(() => { o[act === 'resetColor0' ? 'color' : 'color2'] = null; }, 'edit');
         else if (act === 'flipH' || act === 'flipV') store.commit(() => { o[act] = !o[act]; }, 'edit');
         else if (act === 'splitWall') this.splitWall(o);
@@ -531,9 +533,16 @@ class App {
     if (store.selection?.type !== 'item' || !o) return;
     store.commit(() => {
       const it = store.addItem(o.kind, o.x + 30, o.y + 30, { ...o, rot: o.rot });
-      Object.assign(it, { name: o.name, color: o.color, color2: o.color2, elev: o.elev });
+      Object.assign(it, { name: o.name, color: o.color, color2: o.color2, elev: o.elev, mirror: !!o.mirror });
       store.select({ type: 'item', id: it.id });
     }, 'add');
+  }
+
+  // 左右翻轉（鏡像）：例如流理台水槽與爐具互換、L 型沙發貴妃椅換邊
+  mirrorSelection() {
+    const o = store.selected();
+    if (store.selection?.type !== 'item' || !o) return;
+    store.commit(() => { o.mirror = !o.mirror; }, 'edit');
   }
 
   rotateSelection(deg) {
@@ -953,6 +962,7 @@ class App {
       const keyTools = { v: 'select', w: 'wall', r: 'room', p: 'polygon', d: 'dim', h: 'pan' };
       const k = e.key.toLowerCase();
       if (k === 'r' && store.selection?.type === 'item') { this.rotateSelection(e.shiftKey ? -90 : 90); return; }
+      if (k === 'm' && store.selection?.type === 'item') { this.mirrorSelection(); return; }
       if (keyTools[k]) this.setTool(keyTools[k]);
     });
     window.addEventListener('keyup', (e) => this.view3d.walk.keys.delete(e.code));

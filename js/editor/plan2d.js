@@ -616,7 +616,11 @@ export class Plan2D {
       if (def?.ceiling) ctx.globalAlpha = 0.75;
       const p2 = { ...pal };
       if (def?.roles) { if (it.color && def.roles[0]) p2[def.roles[0]] = it.color; if (it.color2 && def.roles[1]) p2[def.roles[1]] = it.color2; }
+      // 左右翻轉只套用在家具符號上，控制點維持原位（與點選判定一致）
+      ctx.save();
+      if (it.mirror) ctx.scale(-1, 1);
       try { def ? def.plan(ctx, it.w, it.d, lw, p2) : (ctx.strokeRect(-it.w / 2, -it.d / 2, it.w, it.d)); } catch { /* ignore */ }
+      ctx.restore();
       ctx.globalAlpha = 1;
       const isSel = sel?.type === 'item' && sel.id === it.id;
       const isHover = this.hover?.type === 'item' && this.hover.id === it.id;
