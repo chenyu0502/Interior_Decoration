@@ -692,6 +692,29 @@ export class Plan2D {
       ctx.fillStyle = '#1f2937'; ctx.fillText(t1, s.x, s.y - (showArea ? 6 : 0));
       if (showArea) { ctx.font = '10.5px system-ui, sans-serif'; ctx.fillStyle = '#4b5563'; ctx.fillText(t2, s.x, s.y + 8); }
     }
+    this.drawScaleBar(ctx, W / this.dpr, H / this.dpr);
+  }
+
+  // 左上角比例尺（在「2D 平面圖」標籤下方）：依縮放選擇 1-2-5 進位的整數長度，長度約 70 到 170 px
+  drawScaleBar(ctx, viewW, viewH) {
+    const scale = this.view.scale;
+    let len = 10;
+    for (const base of [10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000]) { len = base; if (base * scale >= 70) break; }
+    const px = len * scale, x = 22, y = 58, seg = 4;
+    const label = len >= 100 ? `${len / 100} m` : `${len} cm`;
+    ctx.save();
+    ctx.fillStyle = 'rgba(255,255,255,0.78)';
+    ctx.fillRect(x - 10, y - 22, px + 28, 32);
+    for (let i = 0; i < seg; i++) {
+      ctx.fillStyle = i % 2 ? '#ffffff' : '#1f2937';
+      ctx.fillRect(x + (px / seg) * i, y - 4, px / seg, 6);
+    }
+    ctx.strokeStyle = '#1f2937'; ctx.lineWidth = 1;
+    ctx.strokeRect(x + 0.5, y - 4 + 0.5, px, 6);
+    ctx.fillStyle = '#1f2937'; ctx.font = '10.5px system-ui, sans-serif'; ctx.textBaseline = 'alphabetic';
+    ctx.textAlign = 'left'; ctx.fillText('0', x - 2, y - 9);
+    ctx.textAlign = 'center'; ctx.fillText(label, x + px, y - 9);
+    ctx.restore();
   }
 
   _handle(ctx, x, y, round = false) {

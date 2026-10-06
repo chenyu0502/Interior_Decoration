@@ -121,3 +121,26 @@ export function projectBounds(p) {
   if (!isFinite(x0)) return { x0: 0, y0: 0, x1: 1000, y1: 800, empty: true };
   return { x0, y0, x1, y1 };
 }
+
+// 以 pivot 為中心等比縮放整個平面圖（牆、房間、門窗位置、家具位置、量尺、底圖）。
+// 牆厚、門窗與家具尺寸維持不變，只改變位置與長度。
+export function scaleProject(p, f, pivot) {
+  const { x: px, y: py } = pivot || (() => { const b = projectBounds(p); return { x: b.x0, y: b.y0 }; })();
+  const sx = (x) => px + (x - px) * f, sy = (y) => py + (y - py) * f;
+  for (const w of p.walls) { w.x1 = sx(w.x1); w.y1 = sy(w.y1); w.x2 = sx(w.x2); w.y2 = sy(w.y2); }
+  for (const r of p.rooms) r.points = r.points.map(([x, y]) => [sx(x), sy(y)]);
+  for (const it of p.items) { it.x = sx(it.x); it.y = sy(it.y); }
+  for (const d of p.dims || []) { d.x1 = sx(d.x1); d.y1 = sy(d.y1); d.x2 = sx(d.x2); d.y2 = sy(d.y2); }
+  const wallMap = new Map(p.walls.map((w) => [w.id, w]));
+  for (const op of p.openings) {
+    op.offset *= f;
+    const w = wallMap.get(op.wallId);
+    if (!w) continue;
+    const L = Math.hypot(w.x2 - w.x1, w.y2 - w.y1);
+    // 牆變短時門窗不超出牆
+    if (op.width > L - 4) op.width = Math.max(30, L - 4);
+    op.offset = Math.min(Math.max(op.offset, op.width / 2 + 2), L - op.width / 2 - 2);
+  }
+  const bg = p.background;
+  if (bg) { bg.x = sx(bg.x || 0); bg.y = sy(bg.y || 0); bg.scale *= f; }
+}

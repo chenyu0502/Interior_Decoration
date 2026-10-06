@@ -40,6 +40,8 @@ class Store {
 
   snapshot() {
     const { background, ...rest } = this.project;
+    // 底圖影像太大不放進復原紀錄，只記錄位置與比例
+    if (background) rest._bg = { x: background.x || 0, y: background.y || 0, scale: background.scale };
     return JSON.stringify(rest);
   }
   // 在修改前呼叫，記錄一個復原點
@@ -65,7 +67,9 @@ class Store {
   }
   restore(json) {
     const bg = this.project.background;
-    this.project = { ...JSON.parse(json), background: bg };
+    const { _bg, ...data } = JSON.parse(json);
+    if (bg && _bg) Object.assign(bg, _bg);
+    this.project = { ...data, background: bg };
     if (this.selection && !this.find(this.selection.type, this.selection.id)) this.select(null);
     this.changed('history');
   }
