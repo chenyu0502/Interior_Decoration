@@ -1,0 +1,40 @@
+# 合併到 main 後自動發布 GitHub Pages
+# 首次使用前：Settings → Pages → Source 選擇「GitHub Actions」
+name: 部署 GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 同一時間只保留一個部署，新的部署會等待前一個完成
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: 取得程式碼
+        uses: actions/checkout@v4
+
+      - name: 設定 Pages
+        uses: actions/configure-pages@v5
+
+      - name: 上傳網站檔案
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+
+      - name: 部署
+        id: deployment
+        uses: actions/deploy-pages@v4
