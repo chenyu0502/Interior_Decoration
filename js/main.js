@@ -11,6 +11,7 @@ import { detectRooms, polygonArea, polygonCentroid, pointInPolygon, wallLength, 
 import { nearestWall, roomAt, wallOnRoom, wallSideToward } from './core/model.js';
 import { autoDesign, analyzeRooms, ROOM_TYPES } from './ai/designer.js';
 import * as claude from './ai/claude.js';
+import { analyzeFloorplan, buildProject, estimateScale, loadImageData } from './ai/floorplan-import.js';
 
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
@@ -692,6 +693,7 @@ class App {
     $('#reportModal').addEventListener('click', (e) => { if (e.target.id === 'reportModal' || e.target.closest('[data-close]')) $('#reportModal').hidden = true; });
     $('#fileOpen').addEventListener('change', (e) => this.openFile(e.target.files[0]));
     $('#fileBg').addEventListener('change', (e) => this.importBackground(e.target.files[0]));
+    $('#fileAuto').addEventListener('change', (e) => this.autoImportImage(e.target.files[0]));
 
     document.body.addEventListener('click', (e) => {
       const b = e.target.closest('[data-action]');
@@ -702,6 +704,7 @@ class App {
         open: () => $('#fileOpen').click(),
         save: () => this.saveFile(),
         importBg: () => $('#fileBg').click(),
+        importAuto: () => { if (this.confirmReplace()) $('#fileAuto').click(); },
         calibrate: () => { if (!store.project.background) { toast('請先匯入底圖'); return; } if (this.isMode('3d')) this.setView('split'); this.setTool('calibrate'); },
         removeBg: () => store.update((p) => { p.background = null; }, 'bg'),
         export2d: () => download(this.plan.exportPNG(), `${store.project.name}-平面圖.png`),
@@ -769,6 +772,77 @@ class App {
     };
     r.readAsText(file);
     $('#fileOpen').value = '';
+  }
+
+  // 從平面圖圖片自動建立牆、門窗與房間（不保留底圖）
+  async autoImportImage(file) {
+    $('#fileAuto').value = '';
+    if (!file) return;
+    toast('正在辨識平面圖…');
+    try {
+      const src = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(file); });
+      const img = await loadImageData(src);
+      await new Promise((r) => setTimeout(r, 30)); // 讓提示先顯示
+      const an = analyzeFloorplan(img);
+      if (!an.ok) { toast(`辨識失敗：${an.reason}。可改用「匯入平面圖底圖」手動描圖。`); return; }
+      const est = estimateScale(an);
+      let result = buildProject(an, est.scale, { name: file.name.replace(/\.[^.]+$/, '') });
+      // 比例確認：可直接按確定接受推估值
+      const basis = est.by === 'door' ? `依 ${est.n} 個門寬推估` : '依牆厚推估（未偵測到門）';
+      const ans = prompt(`辨識完成（${basis}），外框約 ${result.size.W} × ${result.size.H} cm。\n若知道實際總寬度，請輸入公分數以校正比例；不確定請直接按確定。`, String(result.size.W));
+      if (ans === null) return;
+      const real = Number(ans);
+      if (real > 0 && Math.abs(real - result.size.W) > 1) result = buildProject(an, est.scale * (real / result.size.W), { name: result.project.name });
+      const P = result.project;
+      if (P.walls.length < 3) { toast('辨識到的牆太少，請改用「匯入平面圖底圖」手動描圖'); return; }
+      this.nameRooms(P);
+      store.checkpoint(); // 匯入結果不滿意時可按 Ctrl+Z 復原
+      store.load(P, { keepHistory: true });
+      this.afterLoad();
+      this.setTool('select');
+      toast(`已自動建立 ${P.walls.length} 面牆、${P.openings.length} 個門窗、${P.rooms.length} 個房間，請檢查並修正細節`);
+    } catch (e) {
+      console.error(e);
+      toast(`辨識失敗：${e.message}`);
+    }
+  }
+
+  // 依面積與門的連通關係推斷房型並命名
+  nameRooms(P) {
+    const base = { living: '客廳', dining: '餐廳', master: '主臥室', bedroom: '臥室', study: '書房', kitchen: '廚房', bathroom: '浴室', entry: '玄關', hall: '走道', balcony: '陽台', closet: '更衣室' };
+    const floor = { bathroom: 'tile_bath', kitchen: 'tile_white', balcony: 'tile_bath', entry: 'tile_beige' };
+    for (const r of P.rooms) { r.name = ''; r.type = 'auto'; }
+    const an = analyzeRooms(P);
+    // 每個房間邊界上的門
+    const doorsOf = new Map(an.map((a) => [a, Object.values(a.sides).flatMap((s) => s.doors)]));
+    const opRooms = new Map();
+    for (const a of an) for (const d of doorsOf.get(a)) { if (!opRooms.has(d.op.id)) opRooms.set(d.op.id, []); opRooms.get(d.op.id).push(a); }
+    const type = new Map();
+    const sorted = [...an].sort((x, y) => y.m2 - x.m2);
+    const living = sorted[0];
+    if (living) type.set(living, 'living');
+    for (const a of sorted.slice(1)) {
+      const doors = doorsOf.get(a);
+      const minDim = Math.min(a.rect.x1 - a.rect.x0, a.rect.y1 - a.rect.y0);
+      const toLiving = doors.filter((d) => (opRooms.get(d.op.id) || []).includes(living));
+      if (a.m2 < 4.5 && (doors.length >= 3 || minDim < 130)) type.set(a, 'hall');
+      else if (a.m2 <= 14 && !sorted.some((x) => type.get(x) === 'kitchen') && toLiving.some((d) => d.def.type === 'sliding' || d.def.type === 'opening')) type.set(a, 'kitchen');
+      else if (a.m2 < 6.5 && doors.length <= 1) type.set(a, 'bathroom');
+    }
+    const rest = sorted.filter((a) => !type.has(a));
+    rest.forEach((a, i) => type.set(a, i === 0 ? 'master' : 'bedroom'));
+    // 三間以上臥室時，最小一間（小於 9 m²）設為書房
+    const beds = rest.filter((a) => type.get(a) === 'bedroom');
+    if (rest.length >= 3 && beds.length && beds[beds.length - 1].m2 < 9) type.set(beds[beds.length - 1], 'study');
+    const counts = {}, seen = {};
+    for (const a of an) counts[type.get(a)] = (counts[type.get(a)] || 0) + 1;
+    for (const a of an) {
+      const t = type.get(a);
+      seen[t] = (seen[t] || 0) + 1;
+      a.room.type = t;
+      a.room.name = base[t] + (counts[t] > 1 ? ` ${seen[t]}` : '');
+      a.room.floor = floor[t] || 'wood_oak';
+    }
   }
 
   importBackground(file) {
