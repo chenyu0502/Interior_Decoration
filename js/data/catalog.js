@@ -144,7 +144,12 @@ const P = {
     const fs = Math.max(6, Math.min(w, d) * 0.22, 0);
     ctx.fillStyle = '#555'; ctx.font = `${Math.min(fs, 18)}px sans-serif`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    // 物件左右翻轉時，文字維持正向
+    const m = ctx.getTransform();
+    ctx.save();
+    if (m.a * m.d - m.b * m.c < 0) ctx.scale(-1, 1);
     ctx.fillText(text, 0, 0);
+    ctx.restore();
   },
 };
 function tint(hex, a = 0.35) {

@@ -5,9 +5,17 @@
 //   次版號：新增功能
 //   修訂號：錯誤修正
 
-export const VERSION = '1.3.1';
+export const VERSION = '1.4.0';
 
 export const CHANGELOG = [
+  {
+    version: '1.4.0',
+    date: '2026-10-06',
+    notes: [
+      '家具新增「左右翻轉」：例如流理台水槽與爐具互換、L 型沙發貴妃椅換邊、書桌抽屜換邊。',
+      '在右側屬性面板按「⇆ 翻轉」或按 M 鍵切換，2D 平面圖與 3D 同步，可復原。',
+    ],
+  },
   {
     version: '1.3.1',
     date: '2026-10-06',

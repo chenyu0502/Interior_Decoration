@@ -232,12 +232,12 @@ export class View3D {
     const seen = new Set();
     for (const it of P.items) {
       seen.add(it.id);
-      const key = JSON.stringify([it.kind, it.w, it.d, it.h, it.color, it.color2, palKey, CATALOG_MAP[it.kind]?.ceiling ? [it.elev, P.settings.wallHeight] : 0]);
+      const key = JSON.stringify([it.kind, it.w, it.d, it.h, it.color, it.color2, !!it.mirror, palKey, CATALOG_MAP[it.kind]?.ceiling ? [it.elev, P.settings.wallHeight] : 0]);
       let entry = this.itemCache.get(it.id);
       if (!entry || entry.key !== key) {
         if (entry) { this.itemsGroup.remove(entry.obj); entry.obj.traverse((o) => o.geometry?.dispose()); }
         const inner = buildItemObject(it, pal, { ceiling: P.settings.wallHeight });
-        inner.scale.setScalar(S);
+        inner.scale.set(it.mirror ? -S : S, S, S); // 左右翻轉：沿物件寬度方向鏡像
         const obj = new THREE.Group();
         obj.add(inner);
         obj.userData = { itemId: it.id };
