@@ -77,9 +77,12 @@ npx http-server -p 8080 -c-1
 
 ### 部署到 GitHub Pages
 
+專案已內建自動部署 workflow（`.github/workflows/pages.yml`），每次合併到 `main` 都會自動發布。
+
 1. 到 GitHub 專案的 Settings → Pages。
-2. Source 選擇 `Deploy from a branch`，分支選擇要發布的分支、資料夾選 `/ (root)`。
-3. 儲存後即可透過 `https://<帳號>.github.io/<專案名稱>/` 使用。
+2. Source 選擇 `GitHub Actions`（只需設定一次）。
+3. 到 Actions 分頁確認「部署 GitHub Pages」執行成功，即可透過 `https://<帳號>.github.io/<專案名稱>/` 使用。
+4. 需要手動重新部署時，在 Actions 分頁選擇「部署 GitHub Pages」並按 `Run workflow`。
 
 ## 快捷鍵
 
