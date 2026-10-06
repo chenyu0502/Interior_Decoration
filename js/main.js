@@ -7,8 +7,8 @@ import { CATALOG, OPENINGS, CATALOG_MAP, OPENING_MAP, CATEGORIES, buildItemObjec
 import { MATERIALS, MATERIAL_MAP, materialSwatchURL } from './data/materials.js';
 import { STYLES, STYLE_MAP, paletteFor } from './data/styles.js';
 import { SAMPLES } from './data/samples.js';
-import { detectRooms, polygonArea, polygonCentroid, pointInPolygon, wallLength, clamp, areaText, toWallLocal } from './core/geometry.js';
-import { nearestWall, roomAt, wallOnRoom, wallSideToward } from './core/model.js';
+import { detectRooms, polygonArea, polygonCentroid, pointInPolygon, wallLength, clamp, areaText, toWallLocal, PING } from './core/geometry.js';
+import { nearestWall, roomAt, wallOnRoom, wallSideToward, scaleProject } from './core/model.js';
 import { autoDesign, analyzeRooms, ROOM_TYPES } from './ai/designer.js';
 import * as claude from './ai/claude.js';
 import { VERSION, CHANGELOG, compareVersions } from './version.js';
@@ -400,6 +400,7 @@ class App {
         <section><div class="kv"><span>A 面材質</span><span>${esc(MATERIAL_MAP[o.matA]?.name)}</span></div>${pick('A')}</section>
         <section><div class="kv"><span>B 面材質</span><span>${esc(MATERIAL_MAP[o.matB]?.name)}</span></div>${pick('B')}</section>
         <div class="btn-row"><button class="btn" data-act="splitWall">從中間分割</button><button class="btn danger" data-act="del">刪除</button></div>
+        <div class="btn-row"><button class="btn" data-act="calibWall" title="輸入這面牆的實際長度，整張平面圖等比縮放">以此牆長度校正整體比例</button></div>
         <p class="hint">拖曳牆移動、拖曳兩端方點調整；在 3D 畫面點選牆面可直接選取該面。</p></div>`;
     } else if (sel.type === 'opening') {
       const def = OPENING_MAP[o.kind] || {};
@@ -422,9 +423,12 @@ class App {
         <section><div class="kv"><span>地板</span><span>${esc(MATERIAL_MAP[o.floor]?.name)}</span></div>${floorPick}</section>
         <section><div class="kv"><span>四周牆面（一次套用）</span></div>${wallPick}</section>
         <div class="btn-row"><button class="btn" data-act="designRoom">✦ 只設計這個房間</button><button class="btn danger" data-act="del">刪除房間</button></div>
+        <div class="btn-row"><button class="btn" data-act="calibRoom" title="輸入這個房間的實際坪數，整張平面圖等比縮放">以此房間坪數校正整體比例</button></div>
         <p class="hint">拖曳頂點可調整房間形狀；刪除房間不會刪除牆。</p></div>`;
     } else if (sel.type === 'dim') {
-      html = `<div class="props"><h3>量尺</h3><div class="sub">${Math.round(Math.hypot(o.x2 - o.x1, o.y2 - o.y1))} cm</div><div class="btn-row"><button class="btn danger" data-act="del">刪除</button></div></div>`;
+      html = `<div class="props"><h3>量尺</h3><div class="sub">${Math.round(Math.hypot(o.x2 - o.x1, o.y2 - o.y1))} cm</div>
+        <div class="btn-row"><button class="btn" data-act="calibDim" title="輸入這段量尺的實際長度，整張平面圖等比縮放">以此長度校正整體比例</button><button class="btn danger" data-act="del">刪除</button></div>
+        <p class="hint">用量尺工具（D）量出圖面上已知長度的位置，再按上方按鈕輸入實際長度，即可校正整體比例。</p></div>`;
     }
     el.innerHTML = html;
     this.bindProps(el, sel, o);
@@ -485,6 +489,9 @@ class App {
         else if (act === 'flipH' || act === 'flipV') store.commit(() => { o[act] = !o[act]; }, 'edit');
         else if (act === 'splitWall') this.splitWall(o);
         else if (act === 'designRoom') this.runDesign({ roomIds: [o.id] });
+        else if (act === 'calibWall') this.calibrateByLength(wallLength(o), '這面牆');
+        else if (act === 'calibDim') this.calibrateByLength(Math.hypot(o.x2 - o.x1, o.y2 - o.y1), '這段量尺');
+        else if (act === 'calibRoom') this.calibrateByArea(Math.abs(polygonArea(o.points)), `「${o.name || '房間'}」`);
       });
     }
     for (const img of $$('img[data-mat]', el)) img.addEventListener('click', () => this.applyMaterialToHit(img.dataset.mat, { type: 'wall', id: o.id, side: img.dataset.side }));
@@ -507,6 +514,11 @@ class App {
         <div class="kv"><span>牆 / 門窗 / 家具</span><span>${P.walls.length} / ${P.openings.length} / ${P.items.length}</span></div>
         <div class="kv"><span>目前風格</span><span>${style ? esc(style.name) : '未套用'}</span></div>
       </section>
+      <section><div class="kv"><span>比例尺 / 坪數調整</span></div>
+        <div class="field"><label>目標坪數</label><div class="row"><input type="number" id="scalePing" step="0.1" min="0.1" value="${total ? (total / 10000 / PING).toFixed(1) : ''}" ${total ? '' : 'disabled placeholder="尚無房間"'}><button class="btn small" id="applyPing" ${total ? '' : 'disabled'}>套用</button></div></div>
+        <div class="field"><label>縮放比例 %</label><div class="row"><input type="number" id="scalePct" step="1" min="10" max="1000" value="100"><button class="btn small" id="applyPct">套用</button></div></div>
+        <p class="hint">整張平面圖等比縮放，牆厚、門窗與家具尺寸不變。也可以選取一面牆、一段量尺或一個房間，輸入實際長度或坪數校正。可按 Ctrl+Z 復原。</p>
+      </section>
       ${P.design.report ? '<div class="btn-row"><button class="btn" id="showReport">查看 AI 設計建議書</button></div>' : ''}
       <section><p class="hint"><b>快速上手</b><br>1. 用「畫牆」或「房間」工具畫出平面（或從「檔案 → 範例平面圖」開始、或匯入平面圖底圖描圖）。<br>2. 從左側拖曳門窗到牆上、拖曳家具到房間。<br>3. 到「AI 風格」選擇風格，一鍵自動配置。<br>4. 右側 3D 畫面可環繞、漫遊、直接拖拉家具。</p></section></div>`;
   }
@@ -519,6 +531,51 @@ class App {
     });
     $('#projWallT')?.addEventListener('change', (e) => store.commit((p) => { p.settings.wallThickness = clamp(Number(e.target.value) || 12, 5, 60); }, 'edit'));
     $('#showReport')?.addEventListener('click', () => this.showReport(store.project.design.report));
+    const applyPing = () => {
+      const total = store.project.rooms.reduce((s, r) => s + Math.abs(polygonArea(r.points)), 0);
+      const target = Number($('#scalePing').value);
+      if (!total || !(target > 0)) return toast('請輸入大於 0 的坪數');
+      this.rescaleProject(Math.sqrt((target * PING * 10000) / total));
+    };
+    const applyPct = () => {
+      const pct = Number($('#scalePct').value);
+      if (!(pct > 0)) return toast('請輸入大於 0 的百分比');
+      this.rescaleProject(pct / 100);
+    };
+    $('#applyPing')?.addEventListener('click', applyPing);
+    $('#applyPct')?.addEventListener('click', applyPct);
+    $('#scalePing')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') applyPing(); });
+    $('#scalePct')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') applyPct(); });
+  }
+
+  // ------------------------------------------------------------ 比例調整
+  // 整張平面圖等比縮放 f 倍（以左上角為基準點）
+  rescaleProject(f) {
+    if (!Number.isFinite(f) || f <= 0) return;
+    if (f < 0.1 || f > 10) return toast('縮放倍數需介於 0.1 到 10 倍之間');
+    if (Math.abs(f - 1) < 1e-4) return toast('比例沒有變化');
+    const P = store.project;
+    if (!P.walls.length && !P.rooms.length && !P.items.length) return toast('平面圖是空的');
+    store.commit((p) => scaleProject(p, f), 'edit');
+    this.plan.fit();
+    this.view3d.resetView?.();
+    const total = store.project.rooms.reduce((s, r) => s + Math.abs(polygonArea(r.points)), 0);
+    toast(`已等比縮放 ${(f * 100).toFixed(1)}%${total ? `，室內面積 ${areaText(total)}` : ''}（Ctrl+Z 可復原）`);
+  }
+
+  calibrateByLength(current, label) {
+    if (!(current > 1)) return;
+    const real = Number(prompt(`${label}目前為 ${Math.round(current)} cm，請輸入實際長度（cm），整張平面圖會等比縮放：`, Math.round(current)));
+    if (!real || real <= 0) return;
+    this.rescaleProject(real / current);
+  }
+
+  calibrateByArea(cm2, label) {
+    if (!(cm2 > 0)) return;
+    const ping = cm2 / 10000 / PING;
+    const real = Number(prompt(`${label}目前為 ${areaText(cm2)}，請輸入實際坪數，整張平面圖會等比縮放：`, ping.toFixed(1)));
+    if (!real || real <= 0) return;
+    this.rescaleProject(Math.sqrt((real * PING * 10000) / cm2));
   }
 
   // ------------------------------------------------------------ 編輯操作
