@@ -31,7 +31,8 @@
         <button data-action="open">開啟專案檔（.json）</button>
         <button data-action="save">儲存專案檔</button>
         <hr />
-        <button data-action="importBg">匯入平面圖底圖（描圖用）</button>
+        <button data-action="importAuto">從圖片自動建立平面圖（PNG / JPG）</button>
+        <button data-action="importBg">匯入平面圖底圖（手動描圖）</button>
         <button data-action="calibrate">校正底圖比例</button>
         <button data-action="removeBg">移除底圖</button>
         <hr />
@@ -146,6 +147,7 @@
 
   <input type="file" id="fileOpen" accept=".json,application/json" hidden />
   <input type="file" id="fileBg" accept="image/*" hidden />
+  <input type="file" id="fileAuto" accept="image/png,image/jpeg,image/webp" hidden />
   <div class="toasts" id="toasts"></div>
 
   <script type="module" src="js/main.js"></script>
