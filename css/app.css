@@ -150,6 +150,13 @@ input, select, textarea { font: inherit; color: inherit; }
 .modal-card > header { display: flex; justify-content: space-between; align-items: center; padding: 14px 18px; border-bottom: 1px solid var(--line); }
 .modal-card h2 { margin: 0; font-size: 18px; }
 .modal-body { overflow: auto; padding: 16px 18px; line-height: 1.65; }
+.modal-card.small { width: min(520px, 100%); }
+.modal-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 18px; border-top: 1px solid var(--line); }
+.release { margin: 0 0 12px; }
+.release h4 { margin: 0 0 2px; font-size: 14px; display: flex; gap: 8px; align-items: baseline; }
+.release h4 small { color: var(--muted); font-weight: 400; }
+.release ul { margin: 4px 0; padding-left: 20px; }
+.ver-badge { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); }
 .report-room { border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 14px; margin: 10px 0; }
 .report-room h4 { margin: 0 0 4px; display: flex; justify-content: space-between; gap: 8px; }
 .report-room h4 small { color: var(--muted); font-weight: 400; }

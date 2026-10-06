@@ -38,6 +38,9 @@
         <hr />
         <button data-action="export2d">匯出 2D 平面圖 PNG</button>
         <button data-action="export3d">匯出 3D 透視圖 PNG</button>
+        <hr />
+        <button data-action="checkUpdate">檢查更新</button>
+        <button data-action="changelog">版本紀錄</button>
       </div>
     </div>
 
@@ -132,6 +135,7 @@
     <span class="grow"></span>
     <label><input type="checkbox" id="snapToggle" checked /> 吸附</label>
     <label><input type="checkbox" id="gridToggle" checked /> 格線</label>
+    <a href="#" id="versionLink" data-action="changelog" title="查看版本紀錄"></a>
     <a href="https://github.com/chenyu0502/interior_decoration" target="_blank" rel="noopener">開源專案</a>
   </footer>
 
@@ -142,6 +146,20 @@
         <button class="icon-btn" data-close>✕</button>
       </header>
       <div class="modal-body" id="reportBody"></div>
+    </div>
+  </div>
+
+  <div class="modal" id="updateModal" hidden>
+    <div class="modal-card small">
+      <header>
+        <h2 id="updateTitle">有新版本</h2>
+        <button class="icon-btn" data-update="later" title="稍後再說">✕</button>
+      </header>
+      <div class="modal-body" id="updateBody"></div>
+      <footer class="modal-foot" id="updateFoot">
+        <button class="btn" data-update="later">稍後再說</button>
+        <button class="btn primary" data-update="now">立即更新</button>
+      </footer>
     </div>
   </div>
 

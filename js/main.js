@@ -11,6 +11,8 @@ import { detectRooms, polygonArea, polygonCentroid, pointInPolygon, wallLength, 
 import { nearestWall, roomAt, wallOnRoom, wallSideToward } from './core/model.js';
 import { autoDesign, analyzeRooms, ROOM_TYPES } from './ai/designer.js';
 import * as claude from './ai/claude.js';
+import { VERSION, CHANGELOG, compareVersions } from './version.js';
+import { Updater } from './core/updater.js';
 import { analyzeFloorplan, buildProject, estimateScale, loadImageData } from './ai/floorplan-import.js';
 
 const $ = (s, el = document) => el.querySelector(s);
@@ -63,6 +65,58 @@ class App {
     this.renderRoomTypes();
     requestAnimationFrame(() => this.plan.fit());
     this.setTool('select');
+    this.initUpdater();
+  }
+
+  // ------------------------------------------------------------ 版本與更新
+  initUpdater() {
+    $('#versionLink').textContent = `v${VERSION}`;
+    this.updater = new Updater((latest) => this.showUpdate(latest));
+    $('#updateModal').addEventListener('click', async (e) => {
+      const b = e.target.closest('[data-update]');
+      if (!b) return;
+      if (b.dataset.update === 'later') {
+        if (this.pendingVersion) { this.updater.snooze(this.pendingVersion); toast('已略過，本次瀏覽期間不再提醒；可從「檔案 → 檢查更新」手動更新'); }
+        $('#updateModal').hidden = true;
+      } else if (b.dataset.update === 'now') {
+        b.disabled = true; b.textContent = '更新中…';
+        store.saveLocal(); // 先存檔，更新後會自動還原目前的設計
+        await this.updater.apply();
+      } else if (b.dataset.update === 'close') {
+        $('#updateModal').hidden = true;
+      }
+    });
+    this.updater.start();
+  }
+
+  releaseHTML(list) {
+    return list.map((r) => `<div class="release"><h4>v${esc(r.version)} <small>${esc(r.date)}</small>${r.version === VERSION ? ' <span class="ver-badge">目前版本</span>' : ''}</h4><ul>${r.notes.map((n) => `<li>${esc(n)}</li>`).join('')}</ul></div>`).join('');
+  }
+
+  showUpdate(latest) {
+    this.pendingVersion = latest.VERSION;
+    const newer = (latest.CHANGELOG || []).filter((r) => compareVersions(r.version, VERSION) > 0);
+    $('#updateTitle').textContent = `有新版本 v${latest.VERSION}`;
+    $('#updateBody').innerHTML = `<p>目前使用 v${esc(VERSION)}，網站已發布 v${esc(latest.VERSION)}。是否立即更新？</p>
+      ${newer.length ? `<p><b>更新內容</b></p>${this.releaseHTML(newer)}` : ''}
+      <p class="hint">更新會重新整理頁面，目前的設計已自動存檔，更新後會自動還原。</p>`;
+    $('#updateFoot').innerHTML = '<button class="btn" data-update="later">稍後再說</button><button class="btn primary" data-update="now">立即更新</button>';
+    $('#updateModal').hidden = false;
+  }
+
+  async checkUpdateManually() {
+    toast('正在檢查更新…');
+    const r = await this.updater.check(true);
+    if (!r) toast('無法檢查更新，請確認網路連線');
+    else if (!r.newer) toast(`已是最新版本 v${VERSION}`);
+  }
+
+  showChangelog() {
+    $('#updateTitle').textContent = `版本紀錄（目前 v${VERSION}）`;
+    $('#updateBody').innerHTML = this.releaseHTML(CHANGELOG);
+    $('#updateFoot').innerHTML = '<button class="btn" data-update="close">關閉</button>';
+    this.pendingVersion = null;
+    $('#updateModal').hidden = false;
   }
 
   // ------------------------------------------------------------ 目錄
@@ -709,6 +763,8 @@ class App {
         removeBg: () => store.update((p) => { p.background = null; }, 'bg'),
         export2d: () => download(this.plan.exportPNG(), `${store.project.name}-平面圖.png`),
         export3d: () => download(this.view3d.screenshot(), `${store.project.name}-3D.png`),
+        checkUpdate: () => this.checkUpdateManually(),
+        changelog: () => { e.preventDefault(); this.showChangelog(); },
         undo: () => store.undo(),
         redo: () => store.redo(),
         detectAll: () => this.detectAllRooms(),
@@ -877,6 +933,7 @@ class App {
     window.addEventListener('keydown', (e) => {
       if (isTyping(e)) return;
       if (!$('#reportModal').hidden) { if (e.key === 'Escape') $('#reportModal').hidden = true; return; }
+      if (!$('#updateModal').hidden) { if (e.key === 'Escape') $('#updateModal').querySelector('[data-update="later"], [data-update="close"]')?.click(); return; }
       const ctrl = e.ctrlKey || e.metaKey;
       if (this.view3d.mode === 'walk') {
         if (e.key === 'Escape') this.toggleWalk();
