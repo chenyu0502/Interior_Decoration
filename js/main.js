@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { store, emptyProject } from './core/state.js';
 import { Plan2D, isTyping } from './editor/plan2d.js';
 import { View3D } from './editor/view3d.js';
-import { CATALOG, OPENINGS, CATALOG_MAP, OPENING_MAP, CATEGORIES, buildItemObject } from './data/catalog.js';
+import { CATALOG, OPENINGS, CATALOG_MAP, OPENING_MAP, CATEGORIES, buildItemObject, itemParams } from './data/catalog.js';
 import { MATERIALS, MATERIAL_MAP, materialSwatchURL } from './data/materials.js';
 import { STYLES, STYLE_MAP, paletteFor } from './data/styles.js';
 import { SAMPLES } from './data/samples.js';
@@ -189,7 +189,7 @@ class App {
     }
     ctx.save(); ctx.translate(48, 48);
     const s = 78 / Math.max(def.w, def.d, 30); ctx.scale(s, s);
-    try { def.plan(ctx, def.w, def.d, 1 / s, pal); } catch { /* ignore */ }
+    try { def.plan(ctx, def.w, def.d, 1 / s, pal, itemParams(null, def)); } catch { /* ignore */ }
     ctx.restore();
   }
 
@@ -387,6 +387,7 @@ class App {
         <div class="field"><label>位置 x / y</label><div class="row"><input type="number" data-k="x" value="${Math.round(o.x)}"><input type="number" data-k="y" value="${Math.round(o.y)}"></div></div>
         <div class="field"><label>離地高度</label><input type="number" data-k="elev" value="${o.elev || 0}"></div>
         <div class="field"><label>旋轉 °</label><div class="row"><input type="number" data-k="rot" value="${Math.round(o.rot || 0)}"><button class="btn small" data-act="rot90">↻90°</button></div></div>
+        ${this.paramFields(def, o)}
         <div class="field"><label>左右翻轉</label><div class="row"><button class="btn small ${o.mirror ? 'on' : ''}" data-act="mirror" title="左右鏡像（M），例如流理台水槽與爐具互換">⇆ ${o.mirror ? '已翻轉' : '翻轉'}</button></div></div>
         ${(def.roles || []).map((r, i) => `<div class="field"><label>${roleNames[r] || r}</label><div class="row"><input type="color" data-k="${i ? 'color2' : 'color'}" value="${(i ? o.color2 : o.color) || pal[r] || '#cccccc'}"><button class="btn small" data-act="resetColor${i}" title="恢復風格預設">↺</button></div></div>`).join('')}
         <div class="btn-row"><button class="btn" data-act="dup">複製 (Ctrl+D)</button><button class="btn danger" data-act="del">刪除 (Del)</button></div>
@@ -479,6 +480,20 @@ class App {
         if (inp.tagName === 'INPUT') inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') inp.blur(); });
       }
     }
+    for (const inp of $$('[data-param]', el)) {
+      inp.addEventListener('change', () => {
+        const k = inp.dataset.param;
+        store.commit(() => {
+          const t = store.find(sel.type, sel.id);
+          if (!t) return;
+          const pd = (CATALOG_MAP[t.kind]?.params || []).find((x) => x.k === k);
+          if (!pd) return;
+          const v = pd.type === 'bool' ? inp.checked : Math.min(pd.max, Math.max(pd.min, Math.round(Number(inp.value) || pd.def)));
+          t.params = { ...(t.params || {}), [k]: v };
+        }, 'edit');
+      });
+      if (inp.type === 'number') inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') inp.blur(); });
+    }
     for (const b of $$('[data-act]', el)) {
       b.addEventListener('click', () => {
         const act = b.dataset.act;
@@ -498,6 +513,15 @@ class App {
     for (const img of $$('img[data-mat]', el)) img.addEventListener('click', () => this.applyMaterialToHit(img.dataset.mat, { type: 'wall', id: o.id, side: img.dataset.side }));
     for (const img of $$('img[data-floor]', el)) img.addEventListener('click', () => this.applyMaterialToHit(img.dataset.floor, { type: 'room', id: o.id }));
     for (const img of $$('img[data-roomwall]', el)) img.addEventListener('click', () => this.applyWallMatToRoom(o, img.dataset.roomwall));
+  }
+
+  // 物件專屬參數（例如格子層櫃的欄數、層數）
+  paramFields(def, o) {
+    if (!def?.params?.length) return '';
+    const v = itemParams(o, def);
+    return def.params.map((p) => p.type === 'bool'
+      ? `<div class="field"><label>${esc(p.label)}</label><label class="check"><input type="checkbox" data-param="${p.k}" ${v[p.k] ? 'checked' : ''}> ${v[p.k] ? '開啟' : '關閉'}</label></div>`
+      : `<div class="field"><label>${esc(p.label)}</label><input type="number" data-param="${p.k}" min="${p.min}" max="${p.max}" step="1" value="${v[p.k]}"${p.unit ? ` title="${p.unit}"` : ''}></div>`).join('');
   }
 
   projectPanel() {
@@ -591,7 +615,7 @@ class App {
     if (store.selection?.type !== 'item' || !o) return;
     store.commit(() => {
       const it = store.addItem(o.kind, o.x + 30, o.y + 30, { ...o, rot: o.rot });
-      Object.assign(it, { name: o.name, color: o.color, color2: o.color2, elev: o.elev, mirror: !!o.mirror });
+      Object.assign(it, { name: o.name, color: o.color, color2: o.color2, elev: o.elev, mirror: !!o.mirror, ...(o.params ? { params: { ...o.params } } : {}) });
       store.select({ type: 'item', id: it.id });
     }, 'add');
   }

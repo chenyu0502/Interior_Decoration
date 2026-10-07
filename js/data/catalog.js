@@ -532,6 +532,135 @@ function buildFenceSlat(k, w, d, h) {
   for (let i = 0; i < n; i++) k.box(w, sh, 2.2, 0, 6 + i * (sh + gap), d / 2 - 1.1, wood);
 }
 
+// ---------------------------------------------------------------- 可調參數的家具
+// 物件參數：目錄定義 params，物件存在 item.params，未設定時用預設值
+export function itemParams(item, def = CATALOG_MAP[item?.kind]) {
+  const out = {};
+  for (const p of def?.params || []) {
+    let v = item?.params?.[p.k];
+    if (v === undefined || v === null) v = p.def;
+    if (p.type === 'int') v = Math.min(p.max, Math.max(p.min, Math.round(Number(v) || p.def)));
+    if (p.type === 'bool') v = !!v;
+    out[p.k] = v;
+  }
+  return out;
+}
+
+// 中島：正面（+Z）為吧台側，留 25 cm 懸空放腳；背面（-Z）為工作側，一端為開放電器櫃，其餘為抽屜
+function planIsland(ctx, w, d, lw, pal, prm = {}) {
+  P.rect(ctx, w, d, lw, tint(pal.stone, 0.5), 1);
+  P.line(ctx, -w / 2, d / 2 - 25, w / 2, d / 2 - 25, lw);
+  const bw = Math.min(prm.bayW || 60, w - 20);
+  ctx.setLineDash([3, 3]);
+  rr(ctx, -w / 2 + 2, -d / 2 + 2, bw - 2, d - 31, 1); ctx.lineWidth = lw; ctx.strokeStyle = STROKE; ctx.stroke();
+  ctx.setLineDash([]);
+  P.line(ctx, -w / 2 + bw, -d / 2, -w / 2 + bw, d / 2 - 25, lw);
+}
+function buildIsland(k, w, d, h, prm = {}) {
+  const p = k.pal;
+  const body = mat(p.legs === 'gold' ? p.wood2 : p.lacquer, p.legs === 'gold' ? 'wood' : 'matte');
+  const inner = mat(p.legs === 'gold' ? '#3a332d' : p.legs === 'metal' ? '#d9d9d6' : p.wood, p.legs === 'metal' ? 'matte' : 'wood');
+  const db = d - 28, zc = -d / 2 + db / 2; // 櫃體深度與中心（靠工作側）
+  const zb = -d / 2; // 工作側立面
+  const kick = 10, top = h - 5, bh = top - kick;
+  const bw = Math.min(prm.bayW || 60, w - 20), t = 2;
+  const x0 = -w / 2, xs = x0 + bw; // 電器櫃範圍 x0..xs
+  k.box(w - 4, kick, db - 4, 0, 0, zc, mat('#333', 'matte'));
+  k.box(w + 4, 5, d, 0, top, 0, mat(p.stone, 'stone'));
+  // 抽屜區
+  const rw = w - bw;
+  k.box(rw, bh, db, xs + rw / 2, kick, zc, body);
+  const nd = 3, dh = bh / nd;
+  for (let i = 0; i < nd; i++) {
+    k.box(rw - 3, dh - 1.5, 1.8, xs + rw / 2, kick + i * dh + 0.75, zb - 0.6, body, 0.3);
+    k.handle(xs + rw / 2, kick + i * dh + dh - 8, zb - 2, Math.min(40, rw * 0.4), false);
+  }
+  // 電器櫃：側板、隔板、層板、吧台側背板
+  k.box(t, bh, db, x0 + t / 2, kick, zc, body);
+  k.box(t, bh, db, xs - t / 2, kick, zc, body);
+  k.box(bw - t * 2, bh, t, x0 + bw / 2, kick, zc + db / 2 - t / 2, body);
+  const rows = Math.max(1, prm.bayRows || 2);
+  const ih = bh - t; // 扣掉底板
+  k.box(bw - t * 2, t, db - t, x0 + bw / 2, kick, zc - t / 2, inner);
+  const cellH = (ih - t * (rows - 1)) / rows;
+  for (let i = 1; i < rows; i++) k.box(bw - t * 2, t, db - t, x0 + bw / 2, kick + t + i * cellH + (i - 1) * t, zc - t / 2, inner);
+  if (prm.appliances === false) return;
+  // 電器：由下往上放烤箱、微波爐、咖啡機
+  const steel = mat('#b9bcbf', 'metal'), dark = mat('#1d1f22', 'gloss'), glassM = mat('#202428', 'glass', { opacity: 0.55 });
+  const aw = Math.min(bw - t * 2 - 4, 58);
+  const cx = x0 + bw / 2, cz = zc - t / 2 + 1;
+  for (let i = 0; i < rows; i++) {
+    const y = kick + t + i * (cellH + t);
+    const ah = Math.min(cellH - 4, i === 0 && rows <= 2 ? 46 : 32);
+    const ad = Math.min(db - 8, i === 0 ? 50 : 38);
+    if (ah < 12 || aw < 20) continue;
+    const kind = i === 0 ? 'oven' : i === 1 ? 'micro' : 'coffee';
+    const ww = kind === 'coffee' ? Math.min(aw, 26) : aw;
+    k.box(ww, ah, ad, cx, y, cz, kind === 'coffee' ? dark : steel, 1);
+    const zf = cz - ad / 2 - 0.4;
+    if (kind === 'oven') {
+      k.box(ww - 6, ah * 0.62, 0.8, cx, y + 4, zf, glassM);
+      k.box(ww - 6, ah * 0.2, 0.8, cx, y + ah * 0.74, zf, dark);
+      k.box(ww * 0.6, 1.4, 2, cx, y + ah * 0.68, zf - 1.5, steel);
+    } else if (kind === 'micro') {
+      k.box(ww * 0.68, ah - 6, 0.8, cx - ww * 0.12, y + 3, zf, glassM);
+      k.box(ww * 0.18, ah - 6, 0.8, cx + ww * 0.36, y + 3, zf, dark);
+    } else {
+      k.box(ww * 0.5, ah * 0.25, 0.8, cx, y + ah * 0.55, zf, steel);
+      k.cyl(3, 2.5, 8, cx, y + 2, cz - 4, mat('#f3f1ec', 'ceramic'), 14);
+    }
+  }
+}
+
+// 格子層櫃：欄數 × 層數可調，外框與隔板厚 2 cm
+function planGridShelf(ctx, w, d, lw, pal, prm = {}) {
+  P.rect(ctx, w, d, lw, tint(pal.wood, 0.35), 1);
+  const c = prm.cols || 3;
+  for (let i = 1; i < c; i++) P.line(ctx, -w / 2 + (w * i) / c, -d / 2, -w / 2 + (w * i) / c, d / 2, lw);
+  if (prm.back !== false) P.line(ctx, -w / 2, -d / 2 + 1.5, w / 2, -d / 2 + 1.5, lw * 1.6);
+}
+function buildGridShelf(k, w, d, h, prm = {}) {
+  const p = k.pal;
+  const body = p.legs === 'metal' || p.legs === 'gold' ? k.woodMat(p.wood2) : k.woodMat();
+  const backM = mat(p.lacquer, 'matte');
+  const cols = prm.cols || 3, rows = prm.rows || 3, t = 2;
+  const cw = (w - t * (cols + 1)) / cols, ch = (h - t * (rows + 1)) / rows;
+  const bd = prm.back !== false ? d - 1 : d; // 背板厚 1 cm
+  const zc = prm.back !== false ? 0.5 : 0;
+  // 外框
+  k.box(t, h, bd, -w / 2 + t / 2, 0, zc, body);
+  k.box(t, h, bd, w / 2 - t / 2, 0, zc, body);
+  k.box(w - t * 2, t, bd, 0, 0, zc, body);
+  k.box(w - t * 2, t, bd, 0, h - t, zc, body);
+  // 隔板與層板
+  for (let i = 1; i < cols; i++) k.box(t, h - t * 2, bd, -w / 2 + t / 2 + i * (cw + t), t, zc, body);
+  for (let j = 1; j < rows; j++) k.box(w - t * 2, t, bd, 0, j * (ch + t), zc, body);
+  if (prm.back !== false) k.box(w, h, 1, 0, 0, -d / 2 + 0.5, backM);
+  if (prm.decor === false || cw < 12 || ch < 12) return;
+  // 擺飾：隨機放書、收納盒、花瓶，部分格子留空
+  const rnd = mulberry32(hashStr(`${k.opts.id || 'grid'}|${cols}|${rows}`));
+  const zIn = zc;
+  for (let j = 0; j < rows; j++) for (let i = 0; i < cols; i++) {
+    const r = rnd();
+    const x = -w / 2 + t + i * (cw + t) + cw / 2, y = t + j * (ch + t);
+    const dd = Math.min(bd - 6, 26);
+    if (r < 0.3) {
+      // 書本
+      let bx = x - cw / 2 + 2;
+      const n = Math.floor(cw / 4.5);
+      for (let b = 0; b < n * 0.7; b++) {
+        const bt = 2.5 + rnd() * 2, bh2 = Math.min(ch - 2, ch * (0.6 + rnd() * 0.3));
+        k.box(bt, bh2, Math.min(dd, 20), bx + bt / 2, y, zIn - 1, mat([p.accent, p.fabric2, p.wood2, '#e9e4da', p.fabric][Math.floor(rnd() * 5)], 'matte'));
+        bx += bt + 0.3;
+      }
+    } else if (r < 0.55) {
+      k.box(cw - 4, Math.min(ch - 4, ch * 0.75), dd, x, y, zIn, mat(rnd() < 0.5 ? '#d8c7a8' : p.fabric2, 'fabric'), 1);
+    } else if (r < 0.7) {
+      k.cyl(Math.min(cw, dd) * 0.18, Math.min(cw, dd) * 0.14, Math.min(ch - 3, ch * 0.7), x, y, zIn, mat(p.ceramic, 'ceramic'), 18);
+    }
+  }
+}
+
 // ---------------------------------------------------------------- 四分之一圓角落層櫃
 // 直角在左後方（靠兩面牆），圓弧朝右前方；左右翻轉後直角改在右後方。
 function quarterShape(w, d) {
@@ -703,7 +832,15 @@ export const CATALOG = [
   { id: 'kitchen_base', name: '廚房下櫃', cat: 'kitchen', w: 90, d: 62, h: 88, roles: ['lacquer', 'stone'], plan: planCabinet, build: (k, w, d, h) => { k.box(w - 4, 10, d - 8, 0, 0, -2, mat('#333', 'matte')); k.box(w, h - 14, d - 4, 0, 10, -2, mat(k.pal.lacquer, 'matte')); k.box(w, 4, d, 0, h - 4, 0, mat(k.pal.stone, 'stone')); k.handle(0, h - 16, d / 2 - 3, 16, false); } },
   { id: 'wall_cabinet', name: '廚房吊櫃', cat: 'kitchen', w: 180, d: 35, h: 70, elev: 150, roles: ['lacquer', 'wood2'], plan: (ctx, w, d, lw) => { ctx.setLineDash([6, 4]); P.rect(ctx, w, d, lw, 'rgba(255,255,255,0.4)', 1); ctx.setLineDash([]); P.line(ctx, -w / 2, -d / 2, w / 2, d / 2, lw); }, build: (k, w, d, h) => buildCabinet(k, w, d, h, { doors: Math.max(1, Math.round(w / 45)), legH: 0 }) },
   { id: 'fridge', name: '冰箱', cat: 'kitchen', w: 75, d: 72, h: 180, roles: ['metal'], plan: (ctx, w, d, lw) => { P.rect(ctx, w, d, lw, '#eef1f3', 2); P.label(ctx, '冰箱', w, d); }, build: (k, w, d, h) => { const m = mat(k.pal.legs === 'metal' ? '#3a3b3d' : '#d9dcdf', 'metal', { metalness: 0.6, roughness: 0.3 }); k.box(w, h, d, 0, 0, 0, m, 2); k.box(w - 1, 0.6, 1, 0, h * 0.62, d / 2, mat('#222', 'matte')); k.box(1.5, 40, 2, -w / 2 + 6, h * 0.66, d / 2 + 1, mat('#bbb', 'chrome')); k.box(1.5, 40, 2, -w / 2 + 6, h * 0.62 - 44, d / 2 + 1, mat('#bbb', 'chrome')); } },
-  { id: 'kitchen_island', name: '中島', cat: 'kitchen', w: 180, d: 90, h: 90, roles: ['lacquer', 'stone'], plan: (ctx, w, d, lw, pal) => { P.rect(ctx, w, d, lw, tint(pal.stone, 0.5), 1); P.line(ctx, -w / 2, d / 2 - 25, w / 2, d / 2 - 25, lw); }, build: (k, w, d, h) => { k.box(w - 4, 10, d - 30, 0, 0, -12, mat('#333', 'matte')); k.box(w, h - 14, d - 28, 0, 10, -13, mat(k.pal.legs === 'gold' ? k.pal.wood2 : k.pal.lacquer, k.pal.legs === 'gold' ? 'wood' : 'matte')); k.box(w + 4, 5, d, 0, h - 5, 0, mat(k.pal.stone, 'stone')); } },
+  {
+    id: 'kitchen_island', name: '中島', cat: 'kitchen', w: 180, d: 90, h: 90, roles: ['lacquer', 'stone'],
+    params: [
+      { k: 'bayW', label: '電器櫃寬', type: 'int', min: 40, max: 120, def: 60, unit: 'cm' },
+      { k: 'bayRows', label: '電器層數', type: 'int', min: 1, max: 3, def: 2 },
+      { k: 'appliances', label: '顯示電器', type: 'bool', def: true },
+    ],
+    plan: planIsland, build: buildIsland,
+  },
   { id: 'washer', name: '洗衣機', cat: 'kitchen', w: 60, d: 62, h: 85, roles: [], plan: (ctx, w, d, lw) => { P.rect(ctx, w, d, lw, '#f5f5f5', 2); P.circle(ctx, 0, 6, Math.min(w, d) * 0.3, lw, '#e0e6ea'); }, build: (k, w, d, h) => { k.box(w, h, d, 0, 0, 0, mat('#f3f3f3', 'gloss'), 2); const door = new THREE.Mesh(new THREE.TorusGeometry(16, 2.5, 10, 32), mat('#bfc5c9', 'chrome')); door.position.set(0, h * 0.45, d / 2 + 1); k.add(door); const g = new THREE.Mesh(new THREE.CircleGeometry(15, 32), mat('#4a5a66', 'gloss')); g.position.set(0, h * 0.45, d / 2 + 0.6); k.add(g); } },
   // ---- 衛浴
   { id: 'toilet', name: '馬桶', cat: 'bath', w: 40, d: 70, h: 78, roles: ['ceramic'], plan: (ctx, w, d, lw) => { rr(ctx, -w / 2, -d / 2, w, 18, 3); fillStroke(ctx, '#fff', lw); ctx.beginPath(); ctx.ellipse(0, 8, w / 2 - 2, d / 2 - 12, 0, 0, Math.PI * 2); fillStroke(ctx, '#fff', lw); }, build: (k, w, d, h) => { const c = mat(k.pal.ceramic, 'ceramic'); k.box(w, h - 30, 18, 0, 30, -d / 2 + 9, c, 3); const b = k.cyl(w / 2 - 1, w / 2 - 6, 40, 0, 0, 6, c, 32); b.scale.z = 1.35; const s = k.cyl(w / 2, w / 2, 3, 0, 40, 6, c, 32); s.scale.z = 1.3; } },
@@ -714,6 +851,16 @@ export const CATALOG = [
   // ---- 收納
   { id: 'shoe_cabinet', name: '鞋櫃', cat: 'storage', w: 120, d: 40, h: 110, roles: ['lacquer', 'wood2'], plan: planCabinet, build: (k, w, d, h) => buildCabinet(k, w, d, h, { doors: Math.max(2, Math.round(w / 45)) }) },
   { id: 'tall_cabinet', name: '高櫃', cat: 'storage', w: 90, d: 45, h: 220, roles: ['lacquer', 'wood2'], plan: planWardrobe, build: (k, w, d, h) => buildCabinet(k, w, d, h, { doors: Math.max(1, Math.round(w / 45)), legH: 6 }) },
+  {
+    id: 'grid_shelf', name: '格子層櫃', cat: 'storage', w: 120, d: 35, h: 120, roles: ['wood', 'lacquer'],
+    params: [
+      { k: 'cols', label: '欄數（橫）', type: 'int', min: 1, max: 10, def: 3 },
+      { k: 'rows', label: '層數（直）', type: 'int', min: 1, max: 10, def: 3 },
+      { k: 'back', label: '背板', type: 'bool', def: true },
+      { k: 'decor', label: '擺飾', type: 'bool', def: true },
+    ],
+    plan: planGridShelf, build: buildGridShelf,
+  },
   { id: 'corner_shelf', name: '四分之一圓角落層櫃', cat: 'storage', w: 45, d: 45, h: 180, roles: ['wood', 'lacquer'], corner: true, plan: planCornerShelf, build: buildCornerShelf },
   { id: 'wall_shelf', name: '壁掛層板', cat: 'storage', w: 100, d: 22, h: 3, elev: 150, roles: ['wood'], plan: (ctx, w, d, lw) => { ctx.setLineDash([4, 3]); P.rect(ctx, w, d, lw, 'rgba(255,255,255,0.4)', 1); ctx.setLineDash([]); }, build: (k, w, d, h) => { k.box(w, h, d, 0, 0, 0, k.woodMat()); k.cyl(5, 4, 16, -w / 3, h, 0, mat(k.pal.ceramic, 'ceramic'), 16); k.box(18, 22, 12, w / 4, h, 0, mat(k.pal.fabric2, 'matte')); } },
   // ---- 燈具
@@ -777,7 +924,7 @@ export function buildItemObject(item, pal, opts = {}) {
     if (item.color2 && def.roles[1]) p[def.roles[1]] = item.color2;
   }
   const k = new Kit(p, { ...opts, id: item.id, elev: item.elev || 0 });
-  if (def) def.build(k, item.w, item.d, item.h);
+  if (def) def.build(k, item.w, item.d, item.h, itemParams(item, def));
   else k.box(item.w, item.h, item.d, 0, 0, 0, mat('#cccccc'));
   return k.g;
 }

@@ -232,7 +232,7 @@ export class View3D {
     const seen = new Set();
     for (const it of P.items) {
       seen.add(it.id);
-      const key = JSON.stringify([it.kind, it.w, it.d, it.h, it.color, it.color2, !!it.mirror, palKey, CATALOG_MAP[it.kind]?.ceiling ? [it.elev, P.settings.wallHeight] : 0]);
+      const key = JSON.stringify([it.kind, it.w, it.d, it.h, it.color, it.color2, !!it.mirror, it.params || null, palKey, CATALOG_MAP[it.kind]?.ceiling ? [it.elev, P.settings.wallHeight] : 0]);
       let entry = this.itemCache.get(it.id);
       if (!entry || entry.key !== key) {
         if (entry) { this.itemsGroup.remove(entry.obj); entry.obj.traverse((o) => o.geometry?.dispose()); }

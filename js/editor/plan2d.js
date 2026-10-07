@@ -5,7 +5,7 @@ import {
   polygonCentroid, polygonArea, pointInPolygon, wallFrame, toWallLocal, wallLength, detectRooms, areaText,
 } from '../core/geometry.js';
 import { wallJoins, wallPolygon, openingCenter, nearestWall, projectBounds, roomAt } from '../core/model.js';
-import { CATALOG_MAP, OPENING_MAP } from '../data/catalog.js';
+import { CATALOG_MAP, OPENING_MAP, itemParams } from '../data/catalog.js';
 import { materialCanvas, getMaterial } from '../data/materials.js';
 import { paletteFor } from '../data/styles.js';
 
@@ -639,7 +639,7 @@ export class Plan2D {
       // 左右翻轉只套用在家具符號上，控制點維持原位（與點選判定一致）
       ctx.save();
       if (it.mirror) ctx.scale(-1, 1);
-      try { def ? def.plan(ctx, it.w, it.d, lw, p2) : (ctx.strokeRect(-it.w / 2, -it.d / 2, it.w, it.d)); } catch { /* ignore */ }
+      try { def ? def.plan(ctx, it.w, it.d, lw, p2, itemParams(it, def)) : (ctx.strokeRect(-it.w / 2, -it.d / 2, it.w, it.d)); } catch { /* ignore */ }
       ctx.restore();
       ctx.globalAlpha = 1;
       const isSel = sel?.type === 'item' && sel.id === it.id;
