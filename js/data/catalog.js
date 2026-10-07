@@ -532,6 +532,55 @@ function buildFenceSlat(k, w, d, h) {
   for (let i = 0; i < n; i++) k.box(w, sh, 2.2, 0, 6 + i * (sh + gap), d / 2 - 1.1, wood);
 }
 
+// ---------------------------------------------------------------- 四分之一圓角落層櫃
+// 直角在左後方（靠兩面牆），圓弧朝右前方；左右翻轉後直角改在右後方。
+function quarterShape(w, d) {
+  const sh = new THREE.Shape();
+  sh.moveTo(0, 0); sh.lineTo(w, 0);
+  sh.absellipse(0, 0, w, d, 0, Math.PI / 2, false);
+  sh.lineTo(0, 0);
+  return sh;
+}
+function planCornerShelf(ctx, w, d, lw, pal) {
+  const x0 = -w / 2, y0 = -d / 2;
+  const arc = (rw, rd) => { ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x0 + rw, y0); ctx.ellipse(x0, y0, rw, rd, 0, 0, Math.PI / 2); ctx.closePath(); };
+  arc(w, d); fillStroke(ctx, tint(pal.wood, 0.4), lw);
+  ctx.setLineDash([3, 3]);
+  arc(w * 0.62, d * 0.62); ctx.lineWidth = lw; ctx.strokeStyle = STROKE; ctx.stroke();
+  ctx.setLineDash([]);
+  // 背板（兩面靠牆側）
+  ctx.lineWidth = lw * 2.5; ctx.beginPath(); ctx.moveTo(x0 + w, y0); ctx.lineTo(x0, y0); ctx.lineTo(x0, y0 + d); ctx.stroke();
+}
+function buildCornerShelf(k, w, d, h) {
+  const p = k.pal;
+  const body = p.legs === 'metal' || p.legs === 'gold' ? k.woodMat(p.wood2) : k.woodMat();
+  const back = p.legs === 'plinth' || p.low ? k.woodMat(p.wood2) : mat(p.lacquer, 'matte');
+  const t = 2;
+  const n = Math.max(2, Math.round(h / 36));
+  const geo = new THREE.ExtrudeGeometry(quarterShape(w, d), { depth: t, bevelEnabled: false, curveSegments: 24 });
+  geo.rotateX(Math.PI / 2); // 形狀 y 軸對應深度方向（+Z），厚度往下
+  geo.translate(-w / 2, t, -d / 2);
+  for (let i = 0; i <= n; i++) {
+    const y = i === n ? h - t : i === 0 ? 4 : 4 + ((h - t - 4) * i) / n;
+    const m = k.add(new THREE.Mesh(geo, body));
+    m.position.y = y;
+  }
+  k.box(w, h, 1.8, 0, 0, -d / 2 + 0.9, back);
+  k.box(1.8, h, d, -w / 2 + 0.9, 0, 0, back);
+  // 弧邊前柱與底座
+  const post = p.legs === 'gold' ? k.metalMat() : body;
+  k.cyl(1.2, 1.2, h, -w / 2 + w * 0.7071, 0, -d / 2 + d * 0.7071, post, 12);
+  // 擺飾
+  const rnd = mulberry32(hashStr(k.opts.id || 'corner'));
+  for (let i = 1; i < n; i++) {
+    const y = 4 + ((h - t - 4) * i) / n + t;
+    const a = 0.25 + rnd() * 0.5, r = 0.45;
+    const x = -w / 2 + Math.cos(a) * w * r, z = -d / 2 + Math.sin(a) * d * r;
+    if (rnd() < 0.5) k.cyl(4, 3.2, 12 + rnd() * 8, x, y, z, mat(p.ceramic, 'ceramic'), 16);
+    else k.box(10, 14 + rnd() * 6, 8, x, y, z, mat(rnd() < 0.5 ? p.accent : p.fabric2, 'matte'));
+  }
+}
+
 // ---------------------------------------------------------------- 目錄
 const CATS = {
   living: '客廳', dining: '餐廳', bedroom: '臥室', study: '書房', kitchen: '廚房', bath: '衛浴', storage: '收納', light: '燈具', decor: '裝飾', outdoor: '戶外', door: '門', window: '窗',
@@ -665,6 +714,7 @@ export const CATALOG = [
   // ---- 收納
   { id: 'shoe_cabinet', name: '鞋櫃', cat: 'storage', w: 120, d: 40, h: 110, roles: ['lacquer', 'wood2'], plan: planCabinet, build: (k, w, d, h) => buildCabinet(k, w, d, h, { doors: Math.max(2, Math.round(w / 45)) }) },
   { id: 'tall_cabinet', name: '高櫃', cat: 'storage', w: 90, d: 45, h: 220, roles: ['lacquer', 'wood2'], plan: planWardrobe, build: (k, w, d, h) => buildCabinet(k, w, d, h, { doors: Math.max(1, Math.round(w / 45)), legH: 6 }) },
+  { id: 'corner_shelf', name: '四分之一圓角落層櫃', cat: 'storage', w: 45, d: 45, h: 180, roles: ['wood', 'lacquer'], corner: true, plan: planCornerShelf, build: buildCornerShelf },
   { id: 'wall_shelf', name: '壁掛層板', cat: 'storage', w: 100, d: 22, h: 3, elev: 150, roles: ['wood'], plan: (ctx, w, d, lw) => { ctx.setLineDash([4, 3]); P.rect(ctx, w, d, lw, 'rgba(255,255,255,0.4)', 1); ctx.setLineDash([]); }, build: (k, w, d, h) => { k.box(w, h, d, 0, 0, 0, k.woodMat()); k.cyl(5, 4, 16, -w / 3, h, 0, mat(k.pal.ceramic, 'ceramic'), 16); k.box(18, 22, 12, w / 4, h, 0, mat(k.pal.fabric2, 'matte')); } },
   // ---- 燈具
   { id: 'floor_lamp', name: '立燈', cat: 'light', w: 40, d: 40, h: 160, roles: ['accent', 'metal'], light: { intensity: 1.2, dist: 4.5 }, plan: planLamp, build: (k, w, d, h) => { k.cyl(w / 2 - 6, w / 2 - 4, 2.5, 0, 0, 0, k.metalMat(), 24); k.cyl(1, 1, h - 30, 0, 2.5, 0, k.metalMat(), 8); buildLampShade(k, 0, h - 30, 0, w / 2, 30, 'drum'); } },
