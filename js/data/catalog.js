@@ -42,6 +42,7 @@ export function mat(color, kind = 'matte', extra = {}) {
   }
   Object.assign(p, extra);
   const m = new THREE.MeshStandardMaterial(p);
+  m.userData.kind = kind; // 寫實渲染依材質種類調整光澤、絨面與玻璃
   matCache.set(key, m);
   return m;
 }

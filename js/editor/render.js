@@ -6,14 +6,15 @@ import { store } from '../core/state.js';
 import { projectBounds } from '../core/model.js';
 import { pointInPolygon, polygonCentroid, polygonArea } from '../core/geometry.js';
 import { CATALOG_MAP } from '../data/catalog.js';
+import { realisticMaterials, makeSky } from './render-look.js';
 
 const S = 0.01; // 公分 → 公尺
 
 // 時段：天空、太陽與曝光
 export const RENDER_TIMES = {
-  day: { name: '白天', sky: '#a9cdf0', horizon: '#eef1ee', ground: '#d9d6cf', env: 1.0, sun: { color: '#fff3e2', intensity: 3.2, elev: 52, azim: 35 }, exposure: 1.1, lights: false },
-  dusk: { name: '黃昏', sky: '#47577a', horizon: '#f2a865', ground: '#8a7563', env: 0.55, sun: { color: '#ffae63', intensity: 2.2, elev: 9, azim: 250 }, exposure: 1.1, lights: true },
-  night: { name: '夜晚', sky: '#070b16', horizon: '#141a2a', ground: '#15171c', env: 0.04, sun: null, exposure: 1.0, lights: true },
+  day: { name: '白天', sky: '#6fa6e3', horizon: '#e3ecf2', ground: '#cfc9bd', env: 1.0, sun: { color: '#fff1dc', intensity: 3.2, elev: 48, azim: 35 }, exposure: 1.1, lights: false, key: 0.46 },
+  dusk: { name: '黃昏', sky: '#33456c', horizon: '#f2a061', ground: '#7d6a59', env: 0.55, sun: { color: '#ffa458', intensity: 2.2, elev: 7, azim: 250 }, exposure: 1.1, lights: true, key: 0.38 },
+  night: { name: '夜晚', sky: '#04070f', horizon: '#0e1322', ground: '#14161b', env: 0.04, sun: null, exposure: 1.0, lights: true, key: 0.3 },
 };
 
 // 品質：長邊像素、取樣次數、光線反彈次數
@@ -22,6 +23,8 @@ export const RENDER_QUALITY = {
   standard: { name: '標準', long: 1440, samples: 200, bounces: 5 },
   fine: { name: '精細（耗時較長）', long: 1920, samples: 600, bounces: 6 },
 };
+
+export const RENDER_TONES = { neutral: '自然（色彩準確）', agx: '電影感（高光柔和）', aces: '鮮明（對比強）' };
 
 export const RENDER_ENGINES = { pathtracing: '光線追蹤（寫實）', raster: '相容模式（快速）' };
 
@@ -87,30 +90,31 @@ export class RenderStudio {
       }
     }
 
-    // 天空（同時作為環境光）
-    if (mod) {
-      const sky = new mod.GradientEquirectTexture(256);
-      sky.topColor.set(t.sky);
-      sky.bottomColor.set(t.horizon);
-      sky.exponent = 0.6;
-      sky.update();
-      this.disposables.push(sky);
-      scene.background = sky;
-      scene.environment = sky;
-    } else {
-      scene.background = new THREE.Color(t.horizon);
-    }
-    scene.environmentIntensity = t.env;
-    scene.backgroundIntensity = 1;
-
-    // 太陽
+    // 天空（同時作為環境光）與太陽
     const b = projectBounds(P);
     const cx = ((b.x0 + b.x1) / 2) * S, cz = ((b.y0 + b.y1) / 2) * S;
+    let sunDir = null;
     if (t.sun) {
+      const el = THREE.MathUtils.degToRad(t.sun.elev), az = THREE.MathUtils.degToRad(t.sun.azim + (opts.sunRotate || 0));
+      sunDir = new THREE.Vector3(Math.cos(el) * Math.sin(az), Math.sin(el), Math.cos(el) * Math.cos(az));
+    }
+    // 光線追蹤：太陽放在天空貼圖裡（有大小的光源，陰影邊緣柔和）；相容模式：天空不含太陽，另用平行光投影
+    const pathTracing = opts.engine !== 'raster' && !!mod;
+    const sky = makeSky({
+      zenith: t.sky, horizon: t.horizon, ground: t.ground, env: t.env,
+      sun: sunDir ? { dir: sunDir, color: t.sun.color } : null,
+      sunIrradiance: pathTracing && t.sun ? t.sun.intensity : 0,
+      width: pathTracing ? 1024 : 512,
+    });
+    this.disposables.push(sky);
+    scene.background = sky;
+    scene.environment = sky;
+    scene.environmentIntensity = 1;
+    scene.backgroundIntensity = 1;
+    if (t.sun && !pathTracing) {
       const sun = new THREE.DirectionalLight(t.sun.color, t.sun.intensity);
       this.sunLight = sun;
-      const el = THREE.MathUtils.degToRad(t.sun.elev), az = THREE.MathUtils.degToRad(t.sun.azim + (opts.sunRotate || 0));
-      sun.position.set(cx + Math.cos(el) * Math.sin(az) * 50, Math.sin(el) * 50, cz + Math.cos(el) * Math.cos(az) * 50);
+      sun.position.set(cx + sunDir.x * 50, sunDir.y * 50, cz + sunDir.z * 50);
       sun.target.position.set(cx, 0, cz);
       scene.add(sun, sun.target);
     }
@@ -144,6 +148,7 @@ export class RenderStudio {
         scene.add(l);
       }
     }
+    this.disposables.push(...realisticMaterials(scene, { lights: opts.lights, normalMaps: opts.detail !== false }));
     return scene;
   }
 
@@ -216,19 +221,28 @@ export class RenderStudio {
       pt.dynamicLowRes = false;
       pt.rasterizeScene = true;
       pt.bounces = q.bounces;
-      pt.filterGlossyFactor = 0.5;
+      pt.filterGlossyFactor = 0.8; // 降低光滑表面多次反射產生的亮點雜訊
       // 所有材質貼圖會合併成一組貼圖陣列，尺寸越大越吃顯示卡記憶體；512 可大幅降低記憶體不足造成的黑畫面
       pt.textureSize.set(512, 512);
-      pt.tiles.set(W * H > 1.6e6 ? 3 : 2, W * H > 1.6e6 ? 3 : 2);
+      // 分塊計算：每次只算一小塊（約 6 萬像素），避免單次運算太久被顯示卡驅動程式中斷（Windows TDR）造成黑畫面
+      const tilesN = Math.min(8, Math.max(2, Math.ceil(Math.sqrt((W * H) / 60000))));
+      pt.tiles.set(tilesN, tilesN);
+      if (opts.denoise !== false) this.useDenoise(pt, mod);
       pt.setScene(scene, camera);
+      this.reblit = () => { pt.pausePathTracing = true; pt.renderSample(); pt.pausePathTracing = false; };
+      this.baseExposure = t.exposure;
+      this.userExposure = opts.exposure ?? 1;
+      this.resultURL = null;
+      this.snapshot = null;
 
       const t0 = performance.now();
       // 每個畫面送出的取樣次數依畫面間隔自動調整，避免顯示卡工作堆積造成瀏覽器卡頓
       let perFrame = 1, last = performance.now(), checked = false;
+      const checkpoints = [0.25, 0.5, 0.75]; // 渲染途中再檢查，並保留最後一張正常畫面
       const hist = []; // 最近幾秒的 [時間, 取樣數]，用來估算目前速度
       const step = () => {
         if (!this.running || this.pt !== pt) return;
-        if (this.glError) { this.fallback(this.glError, opts, host, W, H, mod, cb); return; }
+        if (this.glError) { this.recover(this.glError, opts, host, W, H, mod, cb, t0); return; }
         const now = performance.now(), dt = now - last;
         last = now;
         // 分頁切到背景時瀏覽器會暫停渲染，暫停前的紀錄不列入速度估算
@@ -237,11 +251,20 @@ export class RenderStudio {
         else if (dt > 45 && perFrame > 1) perFrame = Math.max(1, Math.floor(perFrame / 2));
         for (let i = 0; i < perFrame && pt.samples < q.samples; i++) pt.renderSample();
         const exact = Math.min(pt.samples, q.samples), samples = Math.floor(exact);
-        // 前幾次取樣後檢查畫面：全黑或數值異常時改用相容模式
-        if (!checked && exact >= Math.min(3, q.samples) && (opts.lights || opts.time !== 'night')) {
+        // 前幾次取樣後：自動曝光，再檢查畫面；全黑或數值異常時改用相容模式
+        if (!checked && exact >= Math.min(3, q.samples)) {
           checked = true;
-          const bad = this.diagnose();
+          if (opts.autoExposure !== false) this.autoExpose(t.key);
+          const bad = (opts.lights || opts.time !== 'night') ? this.diagnose() : null;
           if (bad) { this.fallback(bad, opts, host, W, H, mod, cb); return; }
+          this.snapshot = this.renderer.domElement.toDataURL('image/png');
+        }
+        if (checked && checkpoints.length && exact >= q.samples * checkpoints[0]) {
+          checkpoints.shift();
+          if (opts.autoExposure !== false && checkpoints.length === 2) this.autoExpose(t.key);
+          const bad = (opts.lights || opts.time !== 'night') ? this.diagnose() : null;
+          if (bad) { this.recover(bad, opts, host, W, H, mod, cb, t0); return; }
+          this.snapshot = this.renderer.domElement.toDataURL('image/png');
         }
         // 預估剩餘時間：以最近 6 秒的取樣速度推算（剛開始送出的工作會先排隊，早期速度偏快）
         const tNow = performance.now();
@@ -267,12 +290,85 @@ export class RenderStudio {
     }
   }
 
+  // 降噪：以保留邊緣的平滑濾鏡輸出到畫面，取樣越多降噪越輕
+  useDenoise(pt, mod) {
+    if (!mod.DenoiseMaterial) return;
+    const dm = new mod.DenoiseMaterial({ blending: THREE.NoBlending });
+    const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), dm);
+    quad.frustumCulled = false;
+    const cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+    cam.position.z = 0.5;
+    this.disposables.push(dm, quad.geometry);
+    pt.renderToCanvasCallback = (target, renderer, q) => {
+      // 依實際取樣次數調整：取樣少時雜訊大，門檻放寬才平滑得掉；取樣多時收緊以保留細節
+      const n = Math.max(1, pt.samples);
+      dm.map = target.texture;
+      dm.opacity = q.material.opacity;
+      dm.sigma = Math.min(5, 1.5 + 8 / Math.sqrt(n));
+      dm.kSigma = 1.2;
+      dm.threshold = Math.min(0.25, Math.max(0.04, 0.6 / Math.sqrt(n)));
+      const ac = renderer.autoClear;
+      renderer.autoClear = false;
+      renderer.render(quad, cam);
+      renderer.autoClear = ac;
+    };
+  }
+
+  // 自動曝光：量測畫面中間調亮度（排除過亮的窗戶與燈），反覆調整到目標亮度
+  autoExpose(key = 0.45) {
+    if (!this.renderer || !this.reblit) return;
+    for (let k = 0; k < 5; k++) {
+      const m = this.measure();
+      if (m == null) return;
+      const ratio = key / Math.max(m, 0.003);
+      if (Math.abs(ratio - 1) < 0.04) break;
+      const f = Math.min(6, Math.max(0.25, Math.pow(ratio, 1.5)));
+      this.baseExposure = Math.min(24, Math.max(0.15, this.baseExposure * f));
+      this.renderer.toneMappingExposure = this.baseExposure * this.userExposure;
+      this.reblit();
+    }
+  }
+
+  measure() {
+    try {
+      const src = this.renderer.domElement;
+      const c = document.createElement('canvas');
+      c.width = 64; c.height = Math.max(1, Math.round((64 * src.height) / src.width));
+      const g = c.getContext('2d', { willReadFrequently: true });
+      g.drawImage(src, 0, 0, c.width, c.height);
+      const d = g.getImageData(0, 0, c.width, c.height).data;
+      const lum = [];
+      for (let i = 0; i < d.length; i += 4) lum.push((d[i] * 0.2126 + d[i + 1] * 0.7152 + d[i + 2] * 0.0722) / 255);
+      lum.sort((a, b) => a - b);
+      const a = Math.floor(lum.length * 0.02), b = Math.ceil(lum.length * 0.93);
+      let sum = 0;
+      for (let i = a; i < b; i++) sum += lum[i];
+      return sum / Math.max(1, b - a);
+    } catch { return null; }
+  }
+
+  // 渲染途中發生異常：有先前的正常畫面就保留，否則改用相容模式
+  recover(reason, opts, host, W, H, mod, cb, t0) {
+    if (!this.snapshot) { this.fallback(reason, opts, host, W, H, mod, cb); return; }
+    const gpu = this.gpuName();
+    this.running = false;
+    this.resultURL = this.snapshot;
+    const img = new Image();
+    img.src = this.snapshot;
+    host.replaceChildren(img);
+    const samples = Math.floor(this.pt?.samples || 0);
+    try { this.pt?.dispose(); } catch { /* ignore */ }
+    this.pt = null;
+    cb.onDone?.({ samples, elapsed: (performance.now() - t0) / 1000, W, H, engine: 'pathtracing', partial: true, reason: `${reason}${gpu ? `（顯示卡：${gpu}）` : ''}` });
+  }
+
   makeRenderer(W, H, opts, antialias) {
     const t = RENDER_TIMES[opts.time] || RENDER_TIMES.day;
     const renderer = new THREE.WebGLRenderer({ antialias, preserveDrawingBuffer: true });
     renderer.setPixelRatio(1);
     renderer.setSize(W, H, false);
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    // 色調映射：自然（PBR Neutral，色彩準確）、電影感（AgX，高光柔和）、鮮明（ACES，對比強）
+    renderer.toneMapping = { aces: THREE.ACESFilmicToneMapping, agx: THREE.AgXToneMapping }[opts.toneMapping] ?? THREE.NeutralToneMapping;
     renderer.toneMappingExposure = (opts.exposure ?? 1) * t.exposure;
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer = renderer;
@@ -356,9 +452,13 @@ export class RenderStudio {
       camera.aspect = W / H;
       camera.updateProjectionMatrix();
       this.camera = camera;
+      this.baseExposure = t.exposure;
+      this.userExposure = opts.exposure ?? 1;
+      this.reblit = () => renderer.render(scene, camera);
       requestAnimationFrame(() => {
         if (!this.running) return;
         renderer.render(scene, camera);
+        if (opts.autoExposure !== false) this.autoExpose(t.key);
         this.running = false;
         this.rasterScene = scene;
         onDone?.({ samples: 1, elapsed: (performance.now() - t0) / 1000, W, H, engine: 'raster', reason: this.fallbackReason });
@@ -369,22 +469,24 @@ export class RenderStudio {
     }
   }
 
-  // 只更新亮度，不重新取樣
-  setExposure(exposure, time) {
+  // 只更新亮度（自動曝光之上再乘上使用者設定），不重新取樣
+  setExposure(exposure) {
     if (!this.renderer) return;
-    const t = RENDER_TIMES[time] || RENDER_TIMES.day;
-    this.renderer.toneMappingExposure = exposure * t.exposure;
-    if (!this.pt) { if (this.rasterScene && !this.running) this.renderer.render(this.rasterScene, this.camera); return; }
-    if (!this.running) {
-      this.pt.pausePathTracing = true;
-      this.pt.renderSample();
-      this.pt.pausePathTracing = false;
-    }
+    this.userExposure = exposure;
+    this.renderer.toneMappingExposure = (this.baseExposure ?? 1) * exposure;
+    if (!this.running && this.reblit && (this.pt || this.rasterScene)) this.reblit();
+  }
+
+  // 完成後切換色調，不重新取樣
+  setTone(tone) {
+    if (!this.renderer) return;
+    this.renderer.toneMapping = { aces: THREE.ACESFilmicToneMapping, agx: THREE.AgXToneMapping }[tone] ?? THREE.NeutralToneMapping;
+    if (!this.running && this.reblit && (this.pt || this.rasterScene)) this.reblit();
   }
 
   stop() { this.running = false; }
 
-  toDataURL() { return this.renderer ? this.renderer.domElement.toDataURL('image/png') : null; }
+  toDataURL() { return this.resultURL || (this.renderer ? this.renderer.domElement.toDataURL('image/png') : null); }
 
   dispose() {
     this.stop();
@@ -392,7 +494,7 @@ export class RenderStudio {
     for (const d of this.disposables) d.dispose?.();
     this.disposables = [];
     if (this.renderer) { this.renderer.dispose(); this.renderer.forceContextLoss?.(); }
-    this.renderer = null; this.pt = null; this.scene = null; this.rasterScene = null;
+    this.renderer = null; this.pt = null; this.scene = null; this.rasterScene = null; this.reblit = null; this.resultURL = null; this.snapshot = null;
   }
 }
 

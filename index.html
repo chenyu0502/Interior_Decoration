@@ -169,8 +169,14 @@
           <div class="field"><label>太陽方位</label><input type="range" id="rSun" min="-180" max="180" step="15" value="0"></div>
           <div class="field"><label>天花板</label><label class="check"><input type="checkbox" id="rCeiling"> 顯示</label></div>
           <div class="field"><label>室內燈光</label><label class="check"><input type="checkbox" id="rLights"> 開燈</label></div>
+          <div class="field"><label>畫質</label><div class="check-col">
+            <label class="check"><input type="checkbox" id="rAuto" checked> 自動曝光</label>
+            <label class="check"><input type="checkbox" id="rDenoise" checked> 降噪</label>
+            <label class="check"><input type="checkbox" id="rDetail" checked> 材質凹凸細節</label>
+          </div></div>
+          <div class="field"><label>色調</label><select id="rTone"></select></div>
           <div class="field"><label>亮度</label><input type="range" id="rExposure" min="0.4" max="2.5" step="0.05" value="1"></div>
-          <p class="hint">使用目前 3D 畫面的視角。建議先按「漫遊」走到想看的位置，或用滑鼠轉到想要的角度，再開始渲染。<br>渲染以光線追蹤計算光線反彈、柔和陰影與反射，取樣越多畫面越清晰；亮度可在完成後再調整。<br>渲染中請保持此分頁在前景，切換到其他分頁時瀏覽器會暫停渲染，切回來會繼續；分頁標題會顯示目前進度。<br>光線追蹤在部分顯示卡上可能無法正常輸出，系統偵測到全黑時會自動改用相容模式；也可以直接選擇「相容模式」快速產生效果圖。</p>
+          <p class="hint">使用目前 3D 畫面的視角。建議先按「漫遊」走到想看的位置，或用滑鼠轉到想要的角度，再開始渲染。<br>渲染以光線追蹤計算光線反彈、柔和陰影與反射，取樣越多畫面越清晰；亮度在自動曝光之上微調，完成後也可以再調整。<br>渲染中請保持此分頁在前景，切換到其他分頁時瀏覽器會暫停渲染，切回來會繼續；分頁標題會顯示目前進度。<br>光線追蹤在部分顯示卡上可能無法正常輸出，系統偵測到全黑時會自動改用相容模式；也可以直接選擇「相容模式」快速產生效果圖。</p>
         </div>
         <div class="render-view">
           <div class="render-stage">
