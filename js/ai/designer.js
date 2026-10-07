@@ -741,15 +741,14 @@ export function autoDesign(styleId, options = {}) {
     a.room.floor = fl[a.type] || (a.type === 'master' ? fl.bedroom : null) || fl.default;
     {
       if (mode === 'replace') {
-        // 移除房間內原有家具
-        P.items = P.items.filter((it) => !pointInPolygon(it.x, it.y, a.room.points));
+        // 移除房間內原有家具（戶外柵欄屬於建築元素，保留）
+        P.items = P.items.filter((it) => CATALOG_MAP[it.kind]?.cat === 'outdoor' || !pointInPolygon(it.x, it.y, a.room.points));
       }
       const L = new Layout(a, style, null);
-      if (mode === 'keep') {
-        for (const it of P.items) if (pointInPolygon(it.x, it.y, a.room.points)) {
-          const def = CATALOG_MAP[it.kind];
-          if (!def?.flat && !def?.ceiling) L.obstacles.push({ ...L.boxOf(it.x, it.y, it.w, it.d, Math.round((it.rot || 0) / 90) * 90 % 360), tag: 'item' });
-        }
+      for (const it of P.items) if (pointInPolygon(it.x, it.y, a.room.points)) {
+        const def = CATALOG_MAP[it.kind];
+        if (mode !== 'keep' && def?.cat !== 'outdoor') continue;
+        if (!def?.flat && !def?.ceiling) L.obstacles.push({ ...L.boxOf(it.x, it.y, it.w, it.d, Math.round((it.rot || 0) / 90) * 90 % 360), tag: 'item' });
       }
       const ctx = { kitchenCenter: kitchen ? polygonCentroid(kitchen.room.points) : null };
       try {
