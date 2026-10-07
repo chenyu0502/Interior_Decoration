@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { store, emptyProject } from './core/state.js';
 import { Plan2D, isTyping } from './editor/plan2d.js';
 import { View3D } from './editor/view3d.js';
-import { CATALOG, OPENINGS, CATALOG_MAP, OPENING_MAP, CATEGORIES, buildItemObject, itemParams } from './data/catalog.js';
+import { CATALOG, OPENINGS, CATALOG_MAP, OPENING_MAP, CATEGORIES, buildItemObject, itemParams, openingLook, LEAF_FINISHES, FRAME_FINISHES } from './data/catalog.js';
 import { MATERIALS, MATERIAL_MAP, materialSwatchURL } from './data/materials.js';
 import { STYLES, STYLE_MAP, paletteFor } from './data/styles.js';
 import { SAMPLES } from './data/samples.js';
@@ -414,6 +414,7 @@ class App {
         <div class="field"><label>高度</label><input type="number" data-k="height" value="${o.height}"></div>
         <div class="field"><label>窗台高</label><input type="number" data-k="sill" value="${o.sill}"></div>
         <div class="field"><label>距牆起點</label><input type="number" data-k="offset" value="${Math.round(o.offset)}"></div>
+        ${this.openingLookFields(o)}
         ${def.cat === 'door' ? `<div class="btn-row"><button class="btn" data-act="flipH">⇆ 左右翻轉</button><button class="btn" data-act="flipV">⇅ 內外翻轉</button></div>` : ''}
         <div class="btn-row"><button class="btn danger" data-act="del">刪除</button></div></div>`;
     } else if (sel.type === 'room') {
@@ -455,8 +456,13 @@ class App {
         const t = store.find(sel.type, sel.id);
         if (!t) return;
         const num = Number(raw);
+        if (k === 'leafFinish' || k === 'frameFinish') {
+          // 切換成玻璃或由玻璃切回時，顏色改回該材質的預設
+          if (k === 'leafFinish' && (raw === 'glass' || t.leafFinish === 'glass')) t.leafColor = null;
+          t[k] = raw || null; return;
+        }
         if (k === 'name' || k === 'type' || k === 'kind') { t[k] = raw; if (k === 'kind') { const d = OPENING_MAP[raw]; Object.assign(t, { width: d.width, height: d.height, sill: d.sill }); } return; }
-        if (k === 'color' || k === 'color2') { t[k] = raw; return; }
+        if (k === 'color' || k === 'color2' || k === 'leafColor' || k === 'frameColor') { t[k] = raw; return; }
         if (!Number.isFinite(num)) return;
         if (k === 'length' && sel.type === 'wall') {
           const L = wallLength(t) || 1;
@@ -504,6 +510,7 @@ class App {
         else if (act === 'mirror') this.mirrorSelection();
         else if (act === 'resetColor0' || act === 'resetColor1') store.commit(() => { o[act === 'resetColor0' ? 'color' : 'color2'] = null; }, 'edit');
         else if (act === 'flipH' || act === 'flipV') store.commit(() => { o[act] = !o[act]; }, 'edit');
+        else if (act === 'resetLeaf' || act === 'resetFrame') store.commit(() => { const p = act === 'resetLeaf' ? 'leaf' : 'frame'; o[`${p}Finish`] = null; o[`${p}Color`] = null; }, 'edit');
         else if (act === 'splitWall') this.splitWall(o);
         else if (act === 'designRoom') this.runDesign({ roomIds: [o.id] });
         else if (act === 'calibWall') this.calibrateByLength(wallLength(o), '這面牆');
@@ -514,6 +521,21 @@ class App {
     for (const img of $$('img[data-mat]', el)) img.addEventListener('click', () => this.applyMaterialToHit(img.dataset.mat, { type: 'wall', id: o.id, side: img.dataset.side }));
     for (const img of $$('img[data-floor]', el)) img.addEventListener('click', () => this.applyMaterialToHit(img.dataset.floor, { type: 'room', id: o.id }));
     for (const img of $$('img[data-roomwall]', el)) img.addEventListener('click', () => this.applyWallMatToRoom(o, img.dataset.roomwall));
+  }
+
+  // 門窗外觀：門片材質與顏色（門）、框材質與顏色（門與窗）
+  openingLookFields(o) {
+    const look = openingLook(o, paletteFor(store.project.design.styleId));
+    const opts = (map, cur, def) => Object.entries(map).map(([k, v]) => `<option value="${k}" ${k === cur ? 'selected' : ''}>${esc(v)}${k === def ? '（預設）' : ''}</option>`).join('');
+    let html = '<section><div class="kv"><span>外觀</span></div>';
+    if (look.leaf) {
+      html += `<div class="field"><label>門片材質</label><select data-k="leafFinish">${opts(LEAF_FINISHES, look.leaf.finish, look.defaults.leaf.finish)}</select></div>
+        <div class="field"><label>門片顏色</label><div class="row"><input type="color" data-k="leafColor" value="${look.leaf.color}"><button class="btn small" data-act="resetLeaf" title="恢復風格預設">↺</button></div></div>`;
+    }
+    html += `<div class="field"><label>框材質</label><select data-k="frameFinish">${opts(FRAME_FINISHES, look.frame.finish, look.defaults.frame.finish)}</select></div>
+      <div class="field"><label>框顏色</label><div class="row"><input type="color" data-k="frameColor" value="${look.frame.color}"><button class="btn small" data-act="resetFrame" title="恢復風格預設">↺</button></div></div>
+      <p class="hint">${look.leaf ? '玻璃門片會加上四周細框；顏色會套用在玻璃上成為有色玻璃。' : '窗戶玻璃維持透明，可調整窗框材質與顏色。'}未自訂時跟隨風格配色。</p></section>`;
+    return html;
   }
 
   // 物件專屬參數（例如格子層櫃的欄數、層數）

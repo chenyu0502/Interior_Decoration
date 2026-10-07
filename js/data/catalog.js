@@ -930,14 +930,47 @@ export function buildItemObject(item, pal, opts = {}) {
   return k.g;
 }
 
+// 門窗外觀：門片與框的材質、顏色。未自訂時依風格配色
+export const LEAF_FINISHES = { wood: '木紋', matte: '霧面烤漆', gloss: '亮面烤漆', metal: '金屬', glass: '玻璃' };
+export const FRAME_FINISHES = { metal: '鋁框（金屬）', wood: '木框', matte: '烤漆框', gloss: '亮面烤漆框' };
+
+export function openingLook(op, pal) {
+  const def = OPENING_MAP[op.kind] || OPENINGS[0];
+  const metalStyle = pal.legs === 'metal' || pal.legs === 'gold';
+  const isWin = def.type === 'window' || def.type === 'french' || def.type === 'fixed' || def.type === 'sliding';
+  const frame = isWin
+    ? { finish: 'metal', color: pal.legs === 'gold' ? '#3b3b3d' : pal.legs === 'metal' ? '#2a2a2a' : '#e9e7e2' }
+    : { finish: metalStyle ? 'matte' : 'wood', color: metalStyle ? pal.lacquer : pal.wood };
+  let leaf;
+  if (def.type === 'sliding') leaf = { finish: 'glass', color: '#cfe3ee' };
+  else if (def.entry) leaf = { finish: pal.legs === 'gold' ? 'metal' : 'wood', color: pal.legs === 'gold' ? '#2b2b2d' : pal.wood2 };
+  else leaf = { finish: metalStyle ? 'matte' : 'wood', color: metalStyle ? pal.lacquer : pal.wood };
+  const hasLeaf = def.cat === 'door' && def.type !== 'opening';
+  return {
+    frame: { finish: op.frameFinish || frame.finish, color: op.frameColor || frame.color },
+    leaf: hasLeaf ? { finish: op.leafFinish || leaf.finish, color: op.leafColor || (op.leafFinish === 'glass' ? '#cfe3ee' : leaf.color) } : null,
+    defaults: { frame, leaf: hasLeaf ? leaf : null },
+  };
+}
+
+function finishMat(finish, color) {
+  switch (finish) {
+    case 'wood': return mat(color, 'wood');
+    case 'gloss': return mat(color, 'gloss');
+    case 'metal': return mat(color, 'metal', { metalness: 0.5, roughness: 0.45 });
+    case 'glass': return mat(color || '#cfe3ee', 'glass');
+    default: return mat(color, 'matte');
+  }
+}
+
 // 門窗 3D：原點在開口中心（沿牆方向）、底部 = 窗台高度，z 為牆厚方向
 export function buildOpeningObject(op, wallT, pal) {
   const def = OPENING_MAP[op.kind] || OPENINGS[0];
   const k = new Kit(pal);
   const w = op.width, h = op.height, t = wallT;
-  const frameMat = def.type === 'window' || def.type === 'french' || def.type === 'fixed' || def.type === 'sliding'
-    ? mat(pal.legs === 'gold' ? '#3b3b3d' : pal.legs === 'metal' ? '#2a2a2a' : '#e9e7e2', 'metal', { metalness: 0.4, roughness: 0.5 })
-    : mat(pal.legs === 'metal' || pal.legs === 'gold' ? pal.lacquer : pal.wood, pal.legs === 'metal' || pal.legs === 'gold' ? 'matte' : 'wood');
+  const look = openingLook(op, pal);
+  const frameMat = finishMat(look.frame.finish, look.frame.color);
+  const leafLook = look.leaf;
   const glass = mat('#cfe3ee', 'glass');
   const fw = 5; // 框寬
   if (def.type === 'door' || def.type === 'double' || def.type === 'opening') {
@@ -950,13 +983,23 @@ export function buildOpeningObject(op, wallT, pal) {
     }
     k.box(2, h, t, -w / 2 - 1, 0, 0, frameMat); k.box(2, h, t, w / 2 + 1, 0, 0, frameMat); k.box(w + 4, 2, t, 0, h - 2, 0, frameMat);
     if (def.type === 'opening') return k.g;
-    const leafMat = def.entry ? mat(pal.legs === 'gold' ? '#2b2b2d' : pal.wood2, def.entry && pal.legs === 'gold' ? 'metal' : 'wood') : mat(pal.legs === 'metal' || pal.legs === 'gold' ? pal.lacquer : pal.wood, pal.legs === 'metal' || pal.legs === 'gold' ? 'matte' : 'wood');
+    const leafMat = finishMat(leafLook.finish, leafLook.color);
     const leaves = def.type === 'double' ? 2 : 1;
     const lw = (w - 4) / leaves;
     const zLeaf = (op.flipV ? -1 : 1) * (t / 2 - 3);
     for (let i = 0; i < leaves; i++) {
       const x = -w / 2 + 2 + lw * (i + 0.5);
-      k.box(lw - 0.6, h - 3, 4, x, 0.5, zLeaf, leafMat, 0.4);
+      if (leafLook.finish === 'glass') {
+        // 玻璃門：四周細框加玻璃
+        const st = 4.5, lh = h - 3;
+        k.box(lw - st * 2, lh - st * 2 - 6, 1, x, 0.5 + st + 6, zLeaf, leafMat);
+        k.box(st, lh, 4, x - lw / 2 + st / 2 + 0.3, 0.5, zLeaf, frameMat);
+        k.box(st, lh, 4, x + lw / 2 - st / 2 - 0.3, 0.5, zLeaf, frameMat);
+        k.box(lw - 0.6, st, 4, x, 0.5 + lh - st, zLeaf, frameMat);
+        k.box(lw - 0.6, st + 6, 4, x, 0.5, zLeaf, frameMat);
+      } else {
+        k.box(lw - 0.6, h - 3, 4, x, 0.5, zLeaf, leafMat, 0.4);
+      }
       const hx = leaves === 2 ? (i === 0 ? x + lw / 2 - 6 : x - lw / 2 + 6) : (op.flipH ? x - lw / 2 + 7 : x + lw / 2 - 7);
       const hm = mat(pal.legs === 'gold' ? pal.metal : '#9a9a9a', pal.legs === 'gold' ? 'gold' : 'metal');
       if (def.entry) { k.box(2, 60, 3, hx, 75, zLeaf + 3.5, hm); k.box(2, 60, 3, hx, 75, zLeaf - 3.5, hm); }
@@ -969,7 +1012,8 @@ export function buildOpeningObject(op, wallT, pal) {
     const pw = w / 2 + 3;
     for (let i = 0; i < 2; i++) {
       const x = (i ? 1 : -1) * (w / 4 - 1.5), z = (i ? 1 : -1) * 2.5;
-      k.box(pw, h - 7, 0.8, x, 3, z, glass);
+      const solid = leafLook.finish !== 'glass';
+      k.box(pw, h - 7, solid ? 2.4 : 0.8, x, 3, z, solid ? finishMat(leafLook.finish, leafLook.color) : finishMat('glass', leafLook.color));
       k.box(3, h - 7, 3, x - pw / 2 + 1.5, 3, z, frameMat); k.box(3, h - 7, 3, x + pw / 2 - 1.5, 3, z, frameMat);
       k.box(pw, 3, 3, x, 3, z, frameMat); k.box(pw, 3, 3, x, h - 7, z, frameMat);
     }
