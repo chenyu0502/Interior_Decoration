@@ -1,6 +1,6 @@
 {
   "name": "interior-studio",
-  "version": "1.9.1",
+  "version": "1.9.2",
   "description": "免費開源的網頁室內設計工具：2D 平面圖即時生成 3D，拖拉家具門窗，風格模板 AI 自動設計",
   "private": true,
   "license": "MIT",

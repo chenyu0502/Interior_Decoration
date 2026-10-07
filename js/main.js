@@ -13,7 +13,7 @@ import { autoDesign, analyzeRooms, ROOM_TYPES } from './ai/designer.js';
 import * as claude from './ai/claude.js';
 import { VERSION, CHANGELOG, compareVersions } from './version.js';
 import { Updater } from './core/updater.js';
-import { RenderStudio, RENDER_TIMES, RENDER_QUALITY, RENDER_ASPECTS } from './editor/render.js';
+import { RenderStudio, RENDER_TIMES, RENDER_QUALITY, RENDER_ASPECTS, RENDER_ENGINES } from './editor/render.js';
 import { analyzeFloorplan, buildProject, estimateScale, loadImageData } from './ai/floorplan-import.js';
 
 const $ = (s, el = document) => el.querySelector(s);
@@ -885,7 +885,7 @@ class App {
     if (!this.studio) {
       this.studio = new RenderStudio(this.view3d);
       const fill = (sel, obj) => { $(sel).innerHTML = Object.entries(obj).map(([k, v]) => `<option value="${k}">${esc(typeof v === 'string' ? v : v.name)}</option>`).join(''); };
-      fill('#rTime', RENDER_TIMES); fill('#rQuality', RENDER_QUALITY); fill('#rAspect', RENDER_ASPECTS);
+      fill('#rEngine', RENDER_ENGINES); fill('#rTime', RENDER_TIMES); fill('#rQuality', RENDER_QUALITY); fill('#rAspect', RENDER_ASPECTS);
       $('#rQuality').value = 'standard';
       $('#rTime').addEventListener('change', () => { $('#rLights').checked = RENDER_TIMES[$('#rTime').value].lights; });
       $('#rExposure').addEventListener('input', () => this.studio.setExposure(Number($('#rExposure').value), this.renderOpts?.time));
@@ -945,7 +945,7 @@ class App {
 
   startRender() {
     const opts = {
-      time: $('#rTime').value, quality: $('#rQuality').value, aspect: $('#rAspect').value,
+      engine: $('#rEngine').value, time: $('#rTime').value, quality: $('#rQuality').value, aspect: $('#rAspect').value,
       ceiling: $('#rCeiling').checked, lights: $('#rLights').checked,
       exposure: Number($('#rExposure').value), sunRotate: Number($('#rSun').value),
     };
@@ -965,9 +965,14 @@ class App {
           eta: eta == null ? '預估剩餘時間計算中…' : `預估剩餘約 ${fmtDuration(eta)}`,
         });
       },
-      onDone: ({ samples, elapsed, W, H }) => {
+      onDone: ({ samples, elapsed, W, H, engine, reason }) => {
         this.renderButtons(false);
-        this.renderProgress({ pct: 100, done: true, text: `${W} × ${H} · 取樣 ${samples} 次 · 共 ${fmtDuration(elapsed)}`, eta: '渲染完成' });
+        if (engine === 'raster') {
+          this.renderProgress({ pct: 100, done: true, text: reason ? `光線追蹤無法正常輸出，已改用相容模式。原因：${reason}` : `${W} × ${H} · 相容模式 · 共 ${fmtDuration(elapsed)}`, eta: '渲染完成（相容模式）' });
+          if (reason) toast('光線追蹤輸出異常，已自動改用相容模式產生效果圖');
+        } else {
+          this.renderProgress({ pct: 100, done: true, text: `${W} × ${H} · 取樣 ${samples} 次 · 共 ${fmtDuration(elapsed)}`, eta: '渲染完成' });
+        }
       },
       onError: (err) => {
         console.error(err);
