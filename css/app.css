@@ -116,6 +116,7 @@ input, select, textarea { font: inherit; color: inherit; }
 .field input[type="color"] { width: 100%; height: 30px; border: 1px solid var(--line); border-radius: 7px; padding: 2px; background: var(--panel-2); }
 .field .row { display: flex; gap: 4px; align-items: center; }
 .field .row input { flex: 1; }
+.field label.check { display: flex; gap: 6px; align-items: center; color: var(--text); cursor: pointer; }
 .dims3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
 .dims3 div { font-size: 10px; color: var(--muted); text-align: center; }
 .btn-row { display: flex; gap: 6px; flex-wrap: wrap; margin: 12px 0; }
