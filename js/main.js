@@ -896,7 +896,7 @@ class App {
         const a = b.dataset.render;
         if (a === 'close') this.closeRender();
         else if (a === 'start') this.startRender();
-        else if (a === 'stop') { this.studio.stop(); this.renderButtons(false); $('#renderStatus').textContent += '（已停止）'; }
+        else if (a === 'stop') { this.studio.stop(); this.renderButtons(false); $('#renderEta').textContent = '已停止，可下載目前畫面'; $('#renderBarWrap').classList.remove('busy'); this.renderTitle(null); }
         else if (a === 'download') { const url = this.studio.toDataURL(); if (url) download(url, `${store.project.name}-渲染.png`); }
       });
     }
@@ -909,8 +909,32 @@ class App {
 
   closeRender() {
     this.studio?.stop();
+    this.renderTitle(null);
     this.renderButtons(false);
     $('#renderModal').hidden = true;
+  }
+
+  // 進度條、百分比、預估剩餘時間；busy 為準備階段的跑馬條
+  renderProgress({ pct = 0, busy = false, done = false, text = '', eta = '' }) {
+    const wrap = $('#renderBarWrap');
+    wrap.classList.toggle('busy', busy);
+    wrap.classList.toggle('done', done);
+    const p = Math.max(0, Math.min(100, pct));
+    const label = busy ? '準備中' : `${p < 10 ? p.toFixed(1) : Math.floor(p)}%`;
+    $('#renderBar').style.width = busy ? '' : `${p}%`;
+    $('#renderPct').textContent = label;
+    $('#renderStatus').textContent = text;
+    $('#renderEta').textContent = busy ? '' : eta;
+    const badge = $('#renderBadge');
+    badge.hidden = done || (!busy && p === 0 && !text);
+    badge.textContent = busy ? '準備中' : label;
+    this.renderTitle(done ? null : label);
+  }
+
+  // 分頁標題顯示進度，切到其他視窗時也看得到
+  renderTitle(label) {
+    if (!this._baseTitle) this._baseTitle = document.title;
+    document.title = label ? `［${label}］渲染中 · ${this._baseTitle}` : this._baseTitle;
   }
 
   renderButtons(running) {
@@ -929,21 +953,26 @@ class App {
     if (!store.project.walls.length && !store.project.items.length) { toast('平面圖是空的，請先畫牆或放家具'); return; }
     this.studio.dispose();
     this.renderButtons(true);
-    $('#renderBar').style.width = '0%';
-    $('#renderStatus').textContent = '載入光線追蹤引擎…';
+    this.renderProgress({ busy: true, text: '載入光線追蹤引擎…' });
     this.studio.start(opts, $('#renderHost'), {
-      onProgress: ({ stage, samples, total, elapsed }) => {
-        $('#renderBar').style.width = `${Math.min(100, (samples / total) * 100).toFixed(1)}%`;
-        $('#renderStatus').textContent = stage === 'scene' ? '建立場景…' : stage === 'compile' ? '準備著色器（第一次較久）…' : `取樣 ${samples} / ${total} · ${Math.round(elapsed)} 秒`;
+      onProgress: ({ stage, samples, exact, total, elapsed, eta }) => {
+        if (stage === 'scene') { this.renderProgress({ busy: true, text: '建立場景…' }); return; }
+        if (stage === 'compile') { this.renderProgress({ busy: true, text: `準備著色器（第一次較久）… 已用 ${fmtDuration(elapsed)}` }); return; }
+        const pct = (exact / total) * 100;
+        this.renderProgress({
+          pct,
+          text: `取樣 ${samples} / ${total} · 已用 ${fmtDuration(elapsed)}`,
+          eta: eta == null ? '預估剩餘時間計算中…' : `預估剩餘約 ${fmtDuration(eta)}`,
+        });
       },
       onDone: ({ samples, elapsed, W, H }) => {
         this.renderButtons(false);
-        $('#renderBar').style.width = '100%';
-        $('#renderStatus').textContent = `完成 · ${W} × ${H} · 取樣 ${samples} 次 · ${Math.round(elapsed)} 秒`;
+        this.renderProgress({ pct: 100, done: true, text: `${W} × ${H} · 取樣 ${samples} 次 · 共 ${fmtDuration(elapsed)}`, eta: '渲染完成' });
       },
       onError: (err) => {
         console.error(err);
         this.renderButtons(false);
+        this.renderProgress({ pct: 0, text: '', eta: '' });
         $('#renderStatus').textContent = `渲染失敗：${err?.message || err}。此瀏覽器或顯示卡可能不支援 WebGL2 光線追蹤，可改用「檔案 → 匯出 3D 透視圖 PNG」。`;
       },
     });
@@ -1122,6 +1151,14 @@ class App {
     });
     window.addEventListener('keyup', (e) => this.view3d.walk.keys.delete(e.code));
   }
+}
+
+// 秒數轉成「1 分 05 秒」
+function fmtDuration(sec) {
+  sec = Math.max(0, Math.round(sec || 0));
+  if (sec < 60) return `${sec} 秒`;
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  return h ? `${h} 小時 ${m} 分` : `${m} 分 ${String(s).padStart(2, '0')} 秒`;
 }
 
 function download(url, name) {
