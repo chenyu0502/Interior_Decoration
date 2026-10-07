@@ -208,15 +208,27 @@ export class RenderStudio {
       const t0 = performance.now();
       // 每個畫面送出的取樣次數依畫面間隔自動調整，避免顯示卡工作堆積造成瀏覽器卡頓
       let perFrame = 1, last = performance.now();
+      const hist = []; // 最近幾秒的 [時間, 取樣數]，用來估算目前速度
       const step = () => {
         if (!this.running || this.pt !== pt) return;
         const now = performance.now(), dt = now - last;
         last = now;
+        // 分頁切到背景時瀏覽器會暫停渲染，暫停前的紀錄不列入速度估算
+        if (dt > 1000) hist.length = 0;
         if (dt < 22 && perFrame < 16) perFrame++;
         else if (dt > 45 && perFrame > 1) perFrame = Math.max(1, Math.floor(perFrame / 2));
         for (let i = 0; i < perFrame && pt.samples < q.samples; i++) pt.renderSample();
-        const samples = Math.floor(pt.samples);
-        onProgress?.({ stage: pt.isCompiling ? 'compile' : 'render', samples, total: q.samples, elapsed: (performance.now() - t0) / 1000 });
+        const exact = Math.min(pt.samples, q.samples), samples = Math.floor(exact);
+        // 預估剩餘時間：以最近 6 秒的取樣速度推算（剛開始送出的工作會先排隊，早期速度偏快）
+        const tNow = performance.now();
+        let eta = null;
+        if (exact > 0) {
+          hist.push([tNow, exact]);
+          while (hist.length > 2 && tNow - hist[0][0] > 6000) hist.shift();
+          const [ta, sa] = hist[0];
+          if (tNow - ta > 1500 && exact > sa) eta = ((q.samples - exact) * (tNow - ta)) / (exact - sa) / 1000;
+        }
+        onProgress?.({ stage: pt.isCompiling || exact === 0 ? 'compile' : 'render', samples, exact, total: q.samples, elapsed: (tNow - t0) / 1000, eta });
         if (pt.samples >= q.samples) {
           this.running = false;
           onDone?.({ samples, elapsed: (performance.now() - t0) / 1000, W, H });
