@@ -13,6 +13,7 @@ import { autoDesign, analyzeRooms, ROOM_TYPES } from './ai/designer.js';
 import * as claude from './ai/claude.js';
 import { VERSION, CHANGELOG, compareVersions } from './version.js';
 import { Updater } from './core/updater.js';
+import { RenderStudio, RENDER_TIMES, RENDER_QUALITY, RENDER_ASPECTS } from './editor/render.js';
 import { analyzeFloorplan, buildProject, estimateScale, loadImageData } from './ai/floorplan-import.js';
 
 const $ = (s, el = document) => el.querySelector(s);
@@ -866,6 +867,7 @@ class App {
         resetView: () => this.view3d.resetView(),
         topView: () => this.view3d.topView(),
         walk: () => this.toggleWalk(),
+        render: () => this.openRender(),
         night: () => { store.update((p) => { p.settings.night = !p.settings.night; }, 'settings'); this.syncToggles(); },
         ceiling: () => { store.update((p) => { p.settings.showCeiling = !p.settings.showCeiling; }, 'settings'); this.syncToggles(); },
         cutaway: () => { store.update((p) => { p.settings.cutaway = !p.settings.cutaway; }, 'settings'); this.syncToggles(); },
@@ -876,6 +878,76 @@ class App {
   }
 
   isMode(m) { return $('#views').classList.contains(`mode-${m}`); }
+
+  // ------------------------------------------------------------ 寫實渲染
+  openRender() {
+    const m = $('#renderModal');
+    if (!this.studio) {
+      this.studio = new RenderStudio(this.view3d);
+      const fill = (sel, obj) => { $(sel).innerHTML = Object.entries(obj).map(([k, v]) => `<option value="${k}">${esc(typeof v === 'string' ? v : v.name)}</option>`).join(''); };
+      fill('#rTime', RENDER_TIMES); fill('#rQuality', RENDER_QUALITY); fill('#rAspect', RENDER_ASPECTS);
+      $('#rQuality').value = 'standard';
+      $('#rTime').addEventListener('change', () => { $('#rLights').checked = RENDER_TIMES[$('#rTime').value].lights; });
+      $('#rExposure').addEventListener('input', () => this.studio.setExposure(Number($('#rExposure').value), this.renderOpts?.time));
+      m.addEventListener('click', (e) => {
+        const b = e.target.closest('[data-render]');
+        if (e.target === m) { this.closeRender(); return; }
+        if (!b) return;
+        const a = b.dataset.render;
+        if (a === 'close') this.closeRender();
+        else if (a === 'start') this.startRender();
+        else if (a === 'stop') { this.studio.stop(); this.renderButtons(false); $('#renderStatus').textContent += '（已停止）'; }
+        else if (a === 'download') { const url = this.studio.toDataURL(); if (url) download(url, `${store.project.name}-渲染.png`); }
+      });
+    }
+    const P = store.project;
+    $('#rTime').value = P.settings.night ? 'night' : ($('#rTime').value || 'day');
+    $('#rLights').checked = RENDER_TIMES[$('#rTime').value].lights;
+    $('#rCeiling').checked = this.view3d.mode === 'walk' || (P.settings.showCeiling && !P.settings.cutaway);
+    m.hidden = false;
+  }
+
+  closeRender() {
+    this.studio?.stop();
+    this.renderButtons(false);
+    $('#renderModal').hidden = true;
+  }
+
+  renderButtons(running) {
+    $('[data-render="start"]').disabled = running;
+    $('[data-render="stop"]').disabled = !running;
+    $('[data-render="download"]').disabled = running || !this.studio?.renderer;
+  }
+
+  startRender() {
+    const opts = {
+      time: $('#rTime').value, quality: $('#rQuality').value, aspect: $('#rAspect').value,
+      ceiling: $('#rCeiling').checked, lights: $('#rLights').checked,
+      exposure: Number($('#rExposure').value), sunRotate: Number($('#rSun').value),
+    };
+    this.renderOpts = opts;
+    if (!store.project.walls.length && !store.project.items.length) { toast('平面圖是空的，請先畫牆或放家具'); return; }
+    this.studio.dispose();
+    this.renderButtons(true);
+    $('#renderBar').style.width = '0%';
+    $('#renderStatus').textContent = '載入光線追蹤引擎…';
+    this.studio.start(opts, $('#renderHost'), {
+      onProgress: ({ stage, samples, total, elapsed }) => {
+        $('#renderBar').style.width = `${Math.min(100, (samples / total) * 100).toFixed(1)}%`;
+        $('#renderStatus').textContent = stage === 'scene' ? '建立場景…' : stage === 'compile' ? '準備著色器（第一次較久）…' : `取樣 ${samples} / ${total} · ${Math.round(elapsed)} 秒`;
+      },
+      onDone: ({ samples, elapsed, W, H }) => {
+        this.renderButtons(false);
+        $('#renderBar').style.width = '100%';
+        $('#renderStatus').textContent = `完成 · ${W} × ${H} · 取樣 ${samples} 次 · ${Math.round(elapsed)} 秒`;
+      },
+      onError: (err) => {
+        console.error(err);
+        this.renderButtons(false);
+        $('#renderStatus').textContent = `渲染失敗：${err?.message || err}。此瀏覽器或顯示卡可能不支援 WebGL2 光線追蹤，可改用「檔案 → 匯出 3D 透視圖 PNG」。`;
+      },
+    });
+  }
 
   toggleWalk() {
     const walking = this.view3d.mode !== 'walk';
@@ -1024,6 +1096,7 @@ class App {
     window.addEventListener('keydown', (e) => {
       if (isTyping(e)) return;
       if (!$('#reportModal').hidden) { if (e.key === 'Escape') $('#reportModal').hidden = true; return; }
+      if (!$('#renderModal').hidden) { if (e.key === 'Escape') this.closeRender(); return; }
       if (!$('#updateModal').hidden) { if (e.key === 'Escape') $('#updateModal').querySelector('[data-update="later"], [data-update="close"]')?.click(); return; }
       const ctrl = e.ctrlKey || e.metaKey;
       if (this.view3d.mode === 'walk') {
