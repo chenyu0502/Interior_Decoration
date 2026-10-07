@@ -23,6 +23,8 @@ export const RENDER_QUALITY = {
   fine: { name: '精細（耗時較長）', long: 1920, samples: 600, bounces: 6 },
 };
 
+export const RENDER_ENGINES = { pathtracing: '光線追蹤（寫實）', raster: '相容模式（快速）' };
+
 export const RENDER_ASPECTS = { view: '目前 3D 畫面', '16:9': '16:9 橫式', '4:3': '4:3 橫式', '1:1': '1:1 方形', '3:4': '3:4 直式' };
 
 let ptModule = null;
@@ -86,14 +88,18 @@ export class RenderStudio {
     }
 
     // 天空（同時作為環境光）
-    const sky = new mod.GradientEquirectTexture(256);
-    sky.topColor.set(t.sky);
-    sky.bottomColor.set(t.horizon);
-    sky.exponent = 0.6;
-    sky.update();
-    this.disposables.push(sky);
-    scene.background = sky;
-    scene.environment = sky;
+    if (mod) {
+      const sky = new mod.GradientEquirectTexture(256);
+      sky.topColor.set(t.sky);
+      sky.bottomColor.set(t.horizon);
+      sky.exponent = 0.6;
+      sky.update();
+      this.disposables.push(sky);
+      scene.background = sky;
+      scene.environment = sky;
+    } else {
+      scene.background = new THREE.Color(t.horizon);
+    }
     scene.environmentIntensity = t.env;
     scene.backgroundIntensity = 1;
 
@@ -102,6 +108,7 @@ export class RenderStudio {
     const cx = ((b.x0 + b.x1) / 2) * S, cz = ((b.y0 + b.y1) / 2) * S;
     if (t.sun) {
       const sun = new THREE.DirectionalLight(t.sun.color, t.sun.intensity);
+      this.sunLight = sun;
       const el = THREE.MathUtils.degToRad(t.sun.elev), az = THREE.MathUtils.degToRad(t.sun.azim + (opts.sunRotate || 0));
       sun.position.set(cx + Math.cos(el) * Math.sin(az) * 50, Math.sin(el) * 50, cz + Math.cos(el) * Math.cos(az) * 50);
       sun.target.position.set(cx, 0, cz);
@@ -164,28 +171,37 @@ export class RenderStudio {
     }
   }
 
-  async start(opts, host, { onProgress, onDone, onError } = {}) {
+  async start(opts, host, cb = {}) {
     this.stop();
     this.running = true;
+    this.fallbackReason = null;
+    const { onProgress, onDone, onError } = cb;
+    let mod = null;
     try {
-      const mod = await loadPathTracer();
-      if (!this.running) return;
-      const { W, H } = this.size(opts);
+      if (opts.engine !== 'raster') mod = await loadPathTracer();
+    } catch (err) {
+      console.error(err);
+      this.fallbackReason = '無法載入光線追蹤引擎';
+    }
+    if (!this.running) return;
+    const { W, H } = this.size(opts);
+    if (opts.engine === 'raster' || !mod) { this.rasterRender(opts, host, W, H, mod, cb); return; }
+    try {
       const t = RENDER_TIMES[opts.time] || RENDER_TIMES.day;
       const q = RENDER_QUALITY[opts.quality] || RENDER_QUALITY.standard;
 
-      const renderer = new THREE.WebGLRenderer({ antialias: false, preserveDrawingBuffer: true });
-      renderer.setPixelRatio(1);
-      renderer.setSize(W, H, false);
-      renderer.toneMapping = THREE.ACESFilmicToneMapping;
-      renderer.toneMappingExposure = (opts.exposure ?? 1) * t.exposure;
-      renderer.outputColorSpace = THREE.SRGBColorSpace;
-      this.renderer = renderer;
+      const renderer = this.makeRenderer(W, H, opts, false);
       host.replaceChildren(renderer.domElement);
+      // 記錄著色器編譯錯誤與顯示卡中斷，用來判斷黑畫面的原因
+      this.glError = null;
+      renderer.debug.checkShaderErrors = true;
+      renderer.debug.onShaderError = (gl, program) => { this.glError = `著色器編譯失敗：${(gl.getProgramInfoLog(program) || '').slice(0, 160)}`; };
+      renderer.domElement.addEventListener('webglcontextlost', (e) => { e.preventDefault(); this.glError = '顯示卡記憶體不足或驅動程式中斷（WebGL context lost）'; });
 
       const camera = this.v.camera.clone();
       camera.aspect = W / H;
       camera.updateProjectionMatrix();
+      this.camera = camera;
 
       onProgress?.({ stage: 'scene', samples: 0, total: q.samples });
       await nextFrame();
@@ -201,16 +217,18 @@ export class RenderStudio {
       pt.rasterizeScene = true;
       pt.bounces = q.bounces;
       pt.filterGlossyFactor = 0.5;
+      // 所有材質貼圖會合併成一組貼圖陣列，尺寸越大越吃顯示卡記憶體；512 可大幅降低記憶體不足造成的黑畫面
+      pt.textureSize.set(512, 512);
       pt.tiles.set(W * H > 1.6e6 ? 3 : 2, W * H > 1.6e6 ? 3 : 2);
       pt.setScene(scene, camera);
-      this.camera = camera;
 
       const t0 = performance.now();
       // 每個畫面送出的取樣次數依畫面間隔自動調整，避免顯示卡工作堆積造成瀏覽器卡頓
-      let perFrame = 1, last = performance.now();
+      let perFrame = 1, last = performance.now(), checked = false;
       const hist = []; // 最近幾秒的 [時間, 取樣數]，用來估算目前速度
       const step = () => {
         if (!this.running || this.pt !== pt) return;
+        if (this.glError) { this.fallback(this.glError, opts, host, W, H, mod, cb); return; }
         const now = performance.now(), dt = now - last;
         last = now;
         // 分頁切到背景時瀏覽器會暫停渲染，暫停前的紀錄不列入速度估算
@@ -219,6 +237,12 @@ export class RenderStudio {
         else if (dt > 45 && perFrame > 1) perFrame = Math.max(1, Math.floor(perFrame / 2));
         for (let i = 0; i < perFrame && pt.samples < q.samples; i++) pt.renderSample();
         const exact = Math.min(pt.samples, q.samples), samples = Math.floor(exact);
+        // 前幾次取樣後檢查畫面：全黑或數值異常時改用相容模式
+        if (!checked && exact >= Math.min(3, q.samples) && (opts.lights || opts.time !== 'night')) {
+          checked = true;
+          const bad = this.diagnose();
+          if (bad) { this.fallback(bad, opts, host, W, H, mod, cb); return; }
+        }
         // 預估剩餘時間：以最近 6 秒的取樣速度推算（剛開始送出的工作會先排隊，早期速度偏快）
         const tNow = performance.now();
         let eta = null;
@@ -231,12 +255,114 @@ export class RenderStudio {
         onProgress?.({ stage: pt.isCompiling || exact === 0 ? 'compile' : 'render', samples, exact, total: q.samples, elapsed: (tNow - t0) / 1000, eta });
         if (pt.samples >= q.samples) {
           this.running = false;
-          onDone?.({ samples, elapsed: (performance.now() - t0) / 1000, W, H });
+          onDone?.({ samples, elapsed: (performance.now() - t0) / 1000, W, H, engine: 'pathtracing' });
           return;
         }
         requestAnimationFrame(step);
       };
       requestAnimationFrame(step);
+    } catch (err) {
+      console.error(err);
+      this.fallback(`光線追蹤初始化失敗：${err?.message || err}`, opts, host, W, H, mod, cb);
+    }
+  }
+
+  makeRenderer(W, H, opts, antialias) {
+    const t = RENDER_TIMES[opts.time] || RENDER_TIMES.day;
+    const renderer = new THREE.WebGLRenderer({ antialias, preserveDrawingBuffer: true });
+    renderer.setPixelRatio(1);
+    renderer.setSize(W, H, false);
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = (opts.exposure ?? 1) * t.exposure;
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.renderer = renderer;
+    return renderer;
+  }
+
+  // 檢查輸出：畫面幾乎全黑、或累積結果含無效數值（NaN）時回傳原因
+  diagnose() {
+    try {
+      const src = this.renderer.domElement;
+      const c = document.createElement('canvas');
+      c.width = 64; c.height = Math.max(1, Math.round((64 * src.height) / src.width));
+      const g = c.getContext('2d', { willReadFrequently: true });
+      g.drawImage(src, 0, 0, c.width, c.height);
+      const d = g.getImageData(0, 0, c.width, c.height).data;
+      let sum = 0;
+      for (let i = 0; i < d.length; i += 4) sum += d[i] + d[i + 1] + d[i + 2];
+      const mean = sum / (d.length / 4) / 3;
+      let nan = 0;
+      const tgt = this.pt?.target;
+      if (tgt && tgt.texture.type === THREE.FloatType) {
+        const n = 8, buf = new Float32Array(n * n * 4);
+        this.renderer.readRenderTargetPixels(tgt, Math.floor(tgt.width / 2 - n / 2), Math.floor(tgt.height / 2 - n / 2), n, n, buf);
+        for (const v of buf) if (!Number.isFinite(v)) nan++;
+      }
+      if (nan) return '光線追蹤結果含無效數值（NaN）';
+      if (mean < 1.5) return '光線追蹤輸出全黑';
+    } catch (err) { console.warn(err); }
+    return null;
+  }
+
+  // 光線追蹤失敗時改用相容模式，並附上顯示卡型號方便回報
+  fallback(reason, opts, host, W, H, mod, cb) {
+    const gpu = this.gpuName();
+    try { this.pt?.dispose(); } catch { /* ignore */ }
+    this.pt = null;
+    if (this.renderer) { this.renderer.dispose(); this.renderer.forceContextLoss?.(); this.renderer = null; }
+    for (const d of this.disposables) d.dispose?.();
+    this.disposables = [];
+    this.fallbackReason = `${reason}${gpu ? `（顯示卡：${gpu}）` : ''}`;
+    console.warn('寫實渲染改用相容模式：', this.fallbackReason);
+    this.rasterRender(opts, host, W, H, mod, cb);
+  }
+
+  gpuName() {
+    try {
+      const gl = (this.renderer || this.v.renderer).getContext();
+      const ext = gl.getExtension('WEBGL_debug_renderer_info');
+      return ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
+    } catch { return ''; }
+  }
+
+  // 相容模式：一般即時渲染（含柔和陰影與環境光），不做光線反彈，幾乎所有裝置都能執行
+  rasterRender(opts, host, W, H, mod, { onProgress, onDone, onError } = {}) {
+    try {
+      const t0 = performance.now();
+      const t = RENDER_TIMES[opts.time] || RENDER_TIMES.day;
+      onProgress?.({ stage: 'scene', samples: 0, total: 1 });
+      const renderer = this.makeRenderer(W, H, opts, true);
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+      host.replaceChildren(renderer.domElement);
+      this.sunLight = null;
+      const scene = this.buildScene(opts, mod);
+      this.scene = scene;
+      // 光線追蹤會自動計算反彈光，相容模式以半球光補足室內亮度
+      scene.add(new THREE.HemisphereLight(t.sky, t.ground, opts.time === 'night' ? 0.15 : 0.9 * t.env + 0.3));
+      if (this.sunLight) {
+        const sun = this.sunLight;
+        sun.castShadow = true;
+        sun.shadow.mapSize.set(4096, 4096);
+        sun.shadow.bias = -0.0004;
+        sun.shadow.normalBias = 0.02;
+        const b = projectBounds(store.project);
+        const R = Math.max(b.x1 - b.x0, b.y1 - b.y0) * S * 0.75 + 2;
+        Object.assign(sun.shadow.camera, { left: -R, right: R, top: R, bottom: -R, near: 1, far: 120 });
+        sun.shadow.radius = 4;
+      }
+      scene.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+      const camera = this.v.camera.clone();
+      camera.aspect = W / H;
+      camera.updateProjectionMatrix();
+      this.camera = camera;
+      requestAnimationFrame(() => {
+        if (!this.running) return;
+        renderer.render(scene, camera);
+        this.running = false;
+        this.rasterScene = scene;
+        onDone?.({ samples: 1, elapsed: (performance.now() - t0) / 1000, W, H, engine: 'raster', reason: this.fallbackReason });
+      });
     } catch (err) {
       this.running = false;
       onError?.(err);
@@ -245,9 +371,10 @@ export class RenderStudio {
 
   // 只更新亮度，不重新取樣
   setExposure(exposure, time) {
-    if (!this.renderer || !this.pt) return;
+    if (!this.renderer) return;
     const t = RENDER_TIMES[time] || RENDER_TIMES.day;
     this.renderer.toneMappingExposure = exposure * t.exposure;
+    if (!this.pt) { if (this.rasterScene && !this.running) this.renderer.render(this.rasterScene, this.camera); return; }
     if (!this.running) {
       this.pt.pausePathTracing = true;
       this.pt.renderSample();
@@ -265,7 +392,7 @@ export class RenderStudio {
     for (const d of this.disposables) d.dispose?.();
     this.disposables = [];
     if (this.renderer) { this.renderer.dispose(); this.renderer.forceContextLoss?.(); }
-    this.renderer = null; this.pt = null; this.scene = null;
+    this.renderer = null; this.pt = null; this.scene = null; this.rasterScene = null;
   }
 }
 
