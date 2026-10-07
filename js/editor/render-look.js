@@ -92,7 +92,8 @@ export function realisticMaterials(root, { lights = false, normalMaps = true } =
       switch (kind) {
         case 'glass':
           r = new THREE.MeshPhysicalMaterial({ color: '#ffffff', metalness: 0, roughness: 0.02, transmission: 1, ior: 1.5, thickness: 0.006, transparent: false });
-          r.attenuationColor = new THREE.Color('#e6f2ef'); r.attenuationDistance = 0.4;
+          // 有色玻璃：以門窗設定的顏色做為穿透衰減色
+          r.attenuationColor = m.color.clone(); r.attenuationDistance = 0.4;
           break;
         case 'gloss': r = physical(m); r.roughness = 0.3; r.clearcoat = 1; r.clearcoatRoughness = 0.04; break;
         case 'ceramic': r = physical(m); r.roughness = 0.12; r.clearcoat = 1; r.clearcoatRoughness = 0.03; break;
