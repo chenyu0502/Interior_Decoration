@@ -114,6 +114,7 @@ export class View3D {
     t.anisotropy = 8;
     t.repeat.set(1 / m.size, 1 / m.size);
     const mat = new THREE.MeshStandardMaterial({ map: t, roughness: m.rough ?? 0.8, metalness: 0, envMapIntensity: m.rough < 0.3 ? 1 : 0.5 });
+    mat.userData.matId = matId; // 寫實渲染依材質種類調整反射與凹凸
     this.texCache.set(matId, mat);
     return mat;
   }

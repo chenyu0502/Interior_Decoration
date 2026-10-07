@@ -13,7 +13,7 @@ import { autoDesign, analyzeRooms, ROOM_TYPES } from './ai/designer.js';
 import * as claude from './ai/claude.js';
 import { VERSION, CHANGELOG, compareVersions } from './version.js';
 import { Updater } from './core/updater.js';
-import { RenderStudio, RENDER_TIMES, RENDER_QUALITY, RENDER_ASPECTS, RENDER_ENGINES } from './editor/render.js';
+import { RenderStudio, RENDER_TIMES, RENDER_QUALITY, RENDER_ASPECTS, RENDER_ENGINES, RENDER_TONES } from './editor/render.js';
 import { analyzeFloorplan, buildProject, estimateScale, loadImageData } from './ai/floorplan-import.js';
 
 const $ = (s, el = document) => el.querySelector(s);
@@ -885,10 +885,11 @@ class App {
     if (!this.studio) {
       this.studio = new RenderStudio(this.view3d);
       const fill = (sel, obj) => { $(sel).innerHTML = Object.entries(obj).map(([k, v]) => `<option value="${k}">${esc(typeof v === 'string' ? v : v.name)}</option>`).join(''); };
-      fill('#rEngine', RENDER_ENGINES); fill('#rTime', RENDER_TIMES); fill('#rQuality', RENDER_QUALITY); fill('#rAspect', RENDER_ASPECTS);
+      fill('#rEngine', RENDER_ENGINES); fill('#rTone', RENDER_TONES); fill('#rTime', RENDER_TIMES); fill('#rQuality', RENDER_QUALITY); fill('#rAspect', RENDER_ASPECTS);
       $('#rQuality').value = 'standard';
       $('#rTime').addEventListener('change', () => { $('#rLights').checked = RENDER_TIMES[$('#rTime').value].lights; });
-      $('#rExposure').addEventListener('input', () => this.studio.setExposure(Number($('#rExposure').value), this.renderOpts?.time));
+      $('#rExposure').addEventListener('input', () => this.studio.setExposure(Number($('#rExposure').value)));
+      $('#rTone').addEventListener('change', () => this.studio.setTone($('#rTone').value));
       m.addEventListener('click', (e) => {
         const b = e.target.closest('[data-render]');
         if (e.target === m) { this.closeRender(); return; }
@@ -948,6 +949,7 @@ class App {
       engine: $('#rEngine').value, time: $('#rTime').value, quality: $('#rQuality').value, aspect: $('#rAspect').value,
       ceiling: $('#rCeiling').checked, lights: $('#rLights').checked,
       exposure: Number($('#rExposure').value), sunRotate: Number($('#rSun').value),
+      toneMapping: $('#rTone').value, autoExposure: $('#rAuto').checked, denoise: $('#rDenoise').checked, detail: $('#rDetail').checked,
     };
     this.renderOpts = opts;
     if (!store.project.walls.length && !store.project.items.length) { toast('平面圖是空的，請先畫牆或放家具'); return; }
@@ -965,9 +967,12 @@ class App {
           eta: eta == null ? '預估剩餘時間計算中…' : `預估剩餘約 ${fmtDuration(eta)}`,
         });
       },
-      onDone: ({ samples, elapsed, W, H, engine, reason }) => {
+      onDone: ({ samples, elapsed, W, H, engine, reason, partial }) => {
         this.renderButtons(false);
-        if (engine === 'raster') {
+        if (partial) {
+          this.renderProgress({ pct: 100, done: true, text: `渲染途中顯示卡輸出異常，已保留取樣 ${samples} 次的畫面。原因：${reason}`, eta: '已保留最後正常畫面' });
+          toast('渲染途中顯示卡輸出異常，已保留最後一張正常畫面；可改用較低品質或相容模式');
+        } else if (engine === 'raster') {
           this.renderProgress({ pct: 100, done: true, text: reason ? `光線追蹤無法正常輸出，已改用相容模式。原因：${reason}` : `${W} × ${H} · 相容模式 · 共 ${fmtDuration(elapsed)}`, eta: '渲染完成（相容模式）' });
           if (reason) toast('光線追蹤輸出異常，已自動改用相容模式產生效果圖');
         } else {
