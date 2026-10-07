@@ -122,7 +122,7 @@ class App {
   // ------------------------------------------------------------ 目錄
   buildCatalogUI() {
     const chips = $('#catChips');
-    const cats = ['all', ...new Set(CATALOG.map((c) => c.cat))];
+    const cats = ['all', ...new Set(CATALOG.filter((c) => c.tab !== 'openings').map((c) => c.cat))];
     chips.innerHTML = cats.map((c) => `<button data-cat="${c}" class="${c === 'all' ? 'active' : ''}">${c === 'all' ? '全部' : CATEGORIES[c]}</button>`).join('');
     chips.addEventListener('click', (e) => {
       const b = e.target.closest('button'); if (!b) return;
@@ -154,8 +154,9 @@ class App {
       this.drawPlanIcon(c, def, isOpening);
       return el;
     };
-    $('#furnitureCards').append(...CATALOG.map((d) => mk(d, false)));
+    $('#furnitureCards').append(...CATALOG.filter((d) => d.tab !== 'openings').map((d) => mk(d, false)));
     $('#openingCards').append(...OPENINGS.map((d) => mk(d, true)));
+    $('#fenceCards').append(...CATALOG.filter((d) => d.tab === 'openings').map((d) => mk(d, false)));
     // 3D 縮圖（閒置時逐一產生）
     this.renderThumbnails();
   }
@@ -217,7 +218,7 @@ class App {
       cam.position.set(center.x + R * 1.1, center.y + R * 0.95, center.z + R * 1.9);
       cam.lookAt(center);
       renderer.render(scene, cam);
-      const card = $(`#furnitureCards .card[data-kind="${def.id}"] canvas`);
+      const card = $(`.cards .card[data-kind="${def.id}"] canvas`);
       if (card) {
         const ctx = card.getContext('2d');
         ctx.fillStyle = '#eef0f2'; ctx.fillRect(0, 0, 96, 96);

@@ -468,9 +468,73 @@ function buildLampShade(k, x, y, z, r, h, kind) {
   k.sphere(r * 0.22, x, y + h * 0.3, z, mat('#fff6dc', 'emissive', { emissiveIntensity: 2 }));
 }
 
+// ---------------------------------------------------------------- 戶外柵欄
+// 柵欄沿 x 方向延伸（寬 = 長度），深度為厚度；拉長時立柱與板材數量自動增加。
+function fencePosts(w, maxGap) {
+  const n = Math.max(1, Math.ceil((w - 1) / maxGap));
+  return Array.from({ length: n + 1 }, (_, i) => -w / 2 + (w * i) / n);
+}
+function planFence(ctx, w, d, lw, pal, kind) {
+  const fill = kind === 'metal' ? tint(pal.metal, 0.35) : tint(pal.wood, 0.45);
+  P.rect(ctx, w, d, lw, fill, 0);
+  const gap = kind === 'metal' ? 150 : 120;
+  const ps = Math.max(d + 2, 6);
+  ctx.fillStyle = kind === 'metal' ? '#3a3a3a' : tint(pal.wood2, 0.9);
+  for (const x of fencePosts(w, gap)) {
+    const cx = Math.min(Math.max(x, -w / 2 + ps / 2), w / 2 - ps / 2);
+    ctx.fillRect(cx - ps / 2, -ps / 2, ps, ps);
+  }
+  ctx.lineWidth = lw; ctx.strokeStyle = STROKE;
+  if (kind === 'slat') P.line(ctx, -w / 2, 0, w / 2, 0, lw);
+  else {
+    const step = kind === 'metal' ? 11 : 14;
+    ctx.beginPath();
+    for (let x = -w / 2 + step; x < w / 2 - 2; x += step) { ctx.moveTo(x, -d / 2); ctx.lineTo(x, d / 2); }
+    ctx.stroke();
+  }
+}
+function buildFencePicket(k, w, d, h) {
+  const wood = k.woodMat(), post = k.woodMat(k.pal.wood2);
+  for (const x of fencePosts(w, 120)) {
+    const px = Math.min(Math.max(x, -w / 2 + 4.5), w / 2 - 4.5);
+    k.box(9, h + 4, 9, px, 0, 0, post);
+    k.box(11, 2, 11, px, h + 4, 0, post);
+  }
+  for (const y of [h * 0.18, h * 0.72]) k.box(w, 7, 3, 0, y, -d / 2 + 1.5, wood);
+  const pw = 9, step = 14;
+  const n = Math.max(1, Math.floor((w - 6) / step));
+  const x0 = -((n - 1) * step) / 2;
+  for (let i = 0; i < n; i++) {
+    const x = x0 + i * step;
+    k.box(pw, h - 10, 2, x, 4, -d / 2 + 4, wood);
+    // 尖頭
+    const tip = k.box(pw * 0.7071, pw * 0.7071, 2, x, h - 6 - pw * 0.3536, -d / 2 + 4, wood);
+    tip.rotation.z = Math.PI / 4;
+  }
+}
+function buildFenceMetal(k, w, d, h) {
+  const m = k.metalMat();
+  for (const x of fencePosts(w, 150)) k.box(5, h, 5, Math.min(Math.max(x, -w / 2 + 2.5), w / 2 - 2.5), 0, 0, m);
+  k.box(w, 4, 6, 0, h - 4, 0, m);
+  k.box(w, 3, 3, 0, h - 16, 0, m);
+  k.box(w, 3, 3, 0, 8, 0, m);
+  const step = 11;
+  const n = Math.max(1, Math.floor((w - 8) / step));
+  const x0 = -((n - 1) * step) / 2;
+  for (let i = 0; i < n; i++) k.box(1.6, h - 12, 1.6, x0 + i * step, 8, 0, m);
+}
+function buildFenceSlat(k, w, d, h) {
+  const wood = k.woodMat();
+  const post = k.pal.legs === 'metal' || k.pal.legs === 'gold' ? k.metalMat() : k.woodMat(k.pal.wood2);
+  for (const x of fencePosts(w, 120)) k.box(8, h, 8, Math.min(Math.max(x, -w / 2 + 4), w / 2 - 4), 0, 0, post);
+  const sh = 9, gap = 3;
+  const n = Math.max(1, Math.floor((h - 6) / (sh + gap)));
+  for (let i = 0; i < n; i++) k.box(w, sh, 2.2, 0, 6 + i * (sh + gap), d / 2 - 1.1, wood);
+}
+
 // ---------------------------------------------------------------- 目錄
 const CATS = {
-  living: '客廳', dining: '餐廳', bedroom: '臥室', study: '書房', kitchen: '廚房', bath: '衛浴', storage: '收納', light: '燈具', decor: '裝飾', door: '門', window: '窗',
+  living: '客廳', dining: '餐廳', bedroom: '臥室', study: '書房', kitchen: '廚房', bath: '衛浴', storage: '收納', light: '燈具', decor: '裝飾', outdoor: '戶外', door: '門', window: '窗',
 };
 export const CATEGORIES = CATS;
 
@@ -632,6 +696,10 @@ export const CATALOG = [
     k.g.children[k.g.children.length - 1].position.y = h - 3;
   } },
   { id: 'vase', name: '花瓶擺飾', cat: 'decor', w: 25, d: 25, h: 40, roles: ['ceramic'], plan: (c, w, d, lw, p) => planRound(c, w, d, lw, p, 'ceramic'), build: (k, w, d, h) => { const pts = []; for (let i = 0; i <= 10; i++) { const t = i / 10; pts.push(new THREE.Vector2((w / 2) * (0.35 + Math.sin(t * Math.PI) * 0.65) * (t > 0.85 ? 0.6 : 1), t * h)); } const m = new THREE.Mesh(new THREE.LatheGeometry(pts, 32), mat(k.pal.legs === 'plinth' ? '#b9a88f' : k.pal.accent, 'ceramic')); k.add(m); } },
+  // ---- 戶外柵欄（顯示在「門窗」分頁）
+  { id: 'fence_picket', name: '木柵欄', cat: 'outdoor', tab: 'openings', w: 180, d: 10, h: 100, roles: ['wood', 'wood2'], plan: (c, w, d, lw, p) => planFence(c, w, d, lw, p, 'picket'), build: buildFencePicket },
+  { id: 'fence_metal', name: '金屬欄杆', cat: 'outdoor', tab: 'openings', w: 200, d: 6, h: 110, roles: ['metal'], plan: (c, w, d, lw, p) => planFence(c, w, d, lw, p, 'metal'), build: buildFenceMetal },
+  { id: 'fence_slat', name: '橫格柵圍籬', cat: 'outdoor', tab: 'openings', w: 180, d: 8, h: 150, roles: ['wood', 'wood2'], plan: (c, w, d, lw, p) => planFence(c, w, d, lw, p, 'slat'), build: buildFenceSlat },
 ];
 
 // ---------------------------------------------------------------- 門窗
