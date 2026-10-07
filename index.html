@@ -38,6 +38,7 @@
         <hr />
         <button data-action="export2d">匯出 2D 平面圖 PNG</button>
         <button data-action="export3d">匯出 3D 透視圖 PNG</button>
+        <button data-action="render">寫實渲染（光線追蹤）</button>
         <hr />
         <button data-action="checkUpdate">檢查更新</button>
         <button data-action="changelog">版本紀錄</button>
@@ -122,6 +123,7 @@
           <button class="btn small" data-action="night" id="nightBtn" title="切換日夜光線">☀ 日間</button>
           <button class="btn small" data-action="cutaway" id="cutBtn" title="把牆降到 120 cm，方便俯瞰配置">矮牆</button>
           <button class="btn small" data-action="ceiling" id="ceilBtn" title="顯示天花板">天花板</button>
+          <button class="btn small primary" data-action="render" title="以光線追蹤產生寫實效果圖">✦ 渲染</button>
         </div>
         <div class="walk-help" id="walkHelp" hidden>W A S D 移動 · 拖曳滑鼠環顧 · Q / E 轉向 · Shift 加速 · Esc 離開</div>
       </div>
@@ -152,6 +154,35 @@
     </div>
   </div>
 
+  <div class="modal" id="renderModal" hidden>
+    <div class="modal-card render-card">
+      <header>
+        <h2>寫實渲染</h2>
+        <button class="icon-btn" data-render="close" title="關閉">✕</button>
+      </header>
+      <div class="modal-body render-body">
+        <div class="render-opts">
+          <div class="field"><label>時段</label><select id="rTime"></select></div>
+          <div class="field"><label>品質</label><select id="rQuality"></select></div>
+          <div class="field"><label>畫面比例</label><select id="rAspect"></select></div>
+          <div class="field"><label>太陽方位</label><input type="range" id="rSun" min="-180" max="180" step="15" value="0"></div>
+          <div class="field"><label>天花板</label><label class="check"><input type="checkbox" id="rCeiling"> 顯示</label></div>
+          <div class="field"><label>室內燈光</label><label class="check"><input type="checkbox" id="rLights"> 開燈</label></div>
+          <div class="field"><label>亮度</label><input type="range" id="rExposure" min="0.4" max="2.5" step="0.05" value="1"></div>
+          <p class="hint">使用目前 3D 畫面的視角。建議先按「漫遊」走到想看的位置，或用滑鼠轉到想要的角度，再開始渲染。<br>渲染以光線追蹤計算光線反彈、柔和陰影與反射，取樣越多畫面越清晰；亮度可在完成後再調整。</p>
+        </div>
+        <div class="render-view">
+          <div class="render-canvas" id="renderHost"><div class="render-empty">按「開始渲染」產生效果圖</div></div>
+          <div class="render-progress"><div class="bar"><i id="renderBar"></i></div><span id="renderStatus">尚未開始</span></div>
+        </div>
+      </div>
+      <footer class="modal-foot">
+        <button class="btn" data-render="stop" disabled>停止</button>
+        <button class="btn" data-render="download" disabled>下載圖片</button>
+        <button class="btn primary" data-render="start">開始渲染</button>
+      </footer>
+    </div>
+  </div>
   <div class="modal" id="updateModal" hidden>
     <div class="modal-card small">
       <header>

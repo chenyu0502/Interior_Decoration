@@ -35,6 +35,7 @@
 - 環繞檢視、俯視、矮牆剖切、顯示天花板、日間 / 夜間燈光。
 - 第一人稱漫遊：W A S D 移動、拖曳滑鼠環顧，2D 平面圖同步顯示所在位置與視角。
 - 匯出 2D 平面圖與 3D 透視圖 PNG。
+- 寫實渲染：以光線追蹤（path tracing）產生效果圖，計算光線在室內多次反彈、柔和陰影、反射與窗戶透光（詳見下方說明）。
 
 ### 4. 材質
 
@@ -58,6 +59,22 @@ AI 自動設計流程：
 AI 引擎是規則式演算法，在瀏覽器本機執行，不需網路與帳號。
 
 選用功能：在設計建議書中輸入自己的 Anthropic API Key，可由 Claude 撰寫更完整的設計提案（色彩計畫、逐室建議、預算分配）。金鑰只存在您的瀏覽器（localStorage），由瀏覽器直接連線 Anthropic API。
+
+## 寫實渲染
+
+1. 在 3D 畫面轉到想看的角度，或按「漫遊」走進房間、調整視線高度與方向。
+2. 按 3D 畫面右上角「✦ 渲染」（或「檔案 → 寫實渲染（光線追蹤）」）。
+3. 選擇：
+   - 時段：白天、黃昏、夜晚（夜晚與黃昏依燈具位置點燈，沒有主燈的房間自動補一盞吸頂燈）。
+   - 品質：草稿、標準、精細，品質越高解析度與取樣次數越多、越清晰，也越耗時。
+   - 畫面比例、太陽方位、是否顯示天花板、是否開啟室內燈光。
+4. 按「開始渲染」，畫面會逐步由顆粒狀變清晰；可隨時「停止」。完成後可拖曳「亮度」調整，再「下載圖片」。
+
+注意事項：
+
+- 渲染在瀏覽器內以顯示卡計算，速度取決於顯示卡效能；需要支援 WebGL2 的瀏覽器（Chrome、Edge、Firefox、Safari 新版）。
+- 室內視角建議勾選「天花板」，光線才會在室內正確反彈；從上方俯瞰時請取消勾選。
+- 第一次渲染需要載入引擎與準備著色器，會多等幾秒。
 
 ## 從圖片自動建立平面圖
 
@@ -154,16 +171,17 @@ js/core/geometry.js     幾何計算、房間偵測、最大內接矩形
 js/core/model.js        牆角接合、門窗位置、牆與房間關係
 js/editor/plan2d.js     2D 平面圖編輯器
 js/editor/view3d.js     3D 檢視（Three.js）
+js/editor/render.js     寫實渲染（光線追蹤）
 js/data/catalog.js      家具與門窗（2D 符號與 3D 程序化模型）
 js/data/materials.js    材質庫與程序化貼圖
 js/data/styles.js       風格模板
 js/data/samples.js      範例平面圖
 js/ai/designer.js       AI 自動設計引擎
 js/ai/claude.js         選用的 Claude API 設計提案
-vendor/                 Three.js r169、Anthropic TypeScript SDK（瀏覽器打包版）
+vendor/                 Three.js r169、Anthropic TypeScript SDK、three-gpu-pathtracer（瀏覽器打包版）
 docs/STYLE_TEMPLATES.md 風格模板說明
 ```
 
 ## 授權
 
-本專案以 MIT 授權釋出。`vendor/` 內的第三方函式庫依其各自授權（Three.js：MIT；Anthropic SDK：MIT）。
+本專案以 MIT 授權釋出。`vendor/` 內的第三方函式庫依其各自授權（Three.js：MIT；Anthropic SDK：MIT；three-gpu-pathtracer 0.0.23 與 three-mesh-bvh 0.8.3：MIT，打包為 `vendor/pathtracer/three-gpu-pathtracer.min.js`）。
