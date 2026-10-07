@@ -427,7 +427,27 @@ export class Plan2D {
       it.rot = best.target;
       const shift = -best.gap * best.side;
       it.x += best.f.nx * shift; it.y += best.f.ny * shift;
+      if (def.corner) this._magnetSide(it, best.w, tol);
     }
+  }
+
+  // 角落家具：背面貼齊後，直角側（未翻轉為左側，翻轉為右側）再貼齊垂直的牆
+  _magnetSide(it, backWall, tol) {
+    const r = deg2rad(it.rot || 0);
+    const s = it.mirror ? 1 : -1;
+    const ex = Math.cos(r) * s, ey = Math.sin(r) * s; // 物件中心指向直角側的方向
+    let best = null;
+    for (const w of store.project.walls) {
+      if (w === backWall) continue;
+      const { u, v, f } = toWallLocal(w, it.x, it.y);
+      if (u < -10 || u > f.L + 10) continue;
+      const sg = v >= 0 ? 1 : -1;
+      // 牆在物件的 -sg·n 方向，需與直角側方向一致
+      if ((-sg * f.nx) * ex + (-sg * f.ny) * ey < 0.95) continue;
+      const gap = Math.abs(v) - w.thickness / 2 - it.w / 2;
+      if (Math.abs(gap) < tol && (!best || Math.abs(gap) < Math.abs(best.gap))) best = { gap };
+    }
+    if (best) { it.x += ex * best.gap; it.y += ey * best.gap; }
   }
 
   _up(e) {
