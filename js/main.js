@@ -7,12 +7,13 @@ import { CATALOG, OPENINGS, CATALOG_MAP, OPENING_MAP, CATEGORIES, buildItemObjec
 import { MATERIALS, MATERIAL_MAP, materialSwatchURL } from './data/materials.js';
 import { STYLES, STYLE_MAP, paletteFor } from './data/styles.js';
 import { SAMPLES } from './data/samples.js';
-import { detectRooms, polygonArea, polygonCentroid, pointInPolygon, wallLength, clamp, areaText, toWallLocal, PING } from './core/geometry.js';
+import { detectRooms, polygonArea, polygonCentroid, pointInPolygon, wallLength, clamp, areaText, toWallLocal, PING, largestInnerRect } from './core/geometry.js';
 import { nearestWall, roomAt, wallOnRoom, wallSideToward, scaleProject } from './core/model.js';
 import { autoDesign, analyzeRooms, ROOM_TYPES } from './ai/designer.js';
 import * as claude from './ai/claude.js';
 import { VERSION, CHANGELOG, compareVersions } from './version.js';
 import { Updater } from './core/updater.js';
+import { mountPano, panoViewerHTML } from './editor/pano-viewer.js';
 import { RenderStudio, RENDER_TIMES, RENDER_QUALITY, RENDER_ASPECTS, RENDER_ENGINES, RENDER_TONES } from './editor/render.js';
 import { analyzeFloorplan, buildProject, estimateScale, loadImageData } from './ai/floorplan-import.js';
 
@@ -912,6 +913,7 @@ class App {
       $('#rTime').addEventListener('change', () => { $('#rLights').checked = RENDER_TIMES[$('#rTime').value].lights; });
       $('#rExposure').addEventListener('input', () => this.studio.setExposure(Number($('#rExposure').value)));
       $('#rTone').addEventListener('change', () => this.studio.setTone($('#rTone').value));
+      $('#rOutput').addEventListener('change', () => this.syncRenderOutput());
       m.addEventListener('click', (e) => {
         const b = e.target.closest('[data-render]');
         if (e.target === m) { this.closeRender(); return; }
@@ -920,18 +922,95 @@ class App {
         if (a === 'close') this.closeRender();
         else if (a === 'start') this.startRender();
         else if (a === 'stop') { this.studio.stop(); this.renderButtons(false); $('#renderEta').textContent = '已停止，可下載目前畫面'; $('#renderBarWrap').classList.remove('busy'); this.renderTitle(null); }
-        else if (a === 'download') { const url = this.studio.toDataURL(); if (url) download(url, `${store.project.name}-渲染.png`); }
+        else if (a === 'download') { const url = this.studio.toDataURL(); if (url) download(url, `${store.project.name}-${this.lastPano ? '360環景' : '渲染'}.png`); }
+        else if (a === 'html') this.downloadPanoHTML();
+        else if (a === 'toggle360') this.showPano(!this.panoViewer);
       });
     }
     const P = store.project;
     $('#rTime').value = P.settings.night ? 'night' : ($('#rTime').value || 'day');
     $('#rLights').checked = RENDER_TIMES[$('#rTime').value].lights;
     $('#rCeiling').checked = this.view3d.mode === 'walk' || (P.settings.showCeiling && !P.settings.cutaway);
+    // 環景拍攝位置：漫遊中可用目前位置，也可選任一房間中央
+    const target = this.view3d.controls.target;
+    const here = P.rooms.find((r) => pointInPolygon(target.x * 100, target.z * 100, r.points));
+    $('#rPanoPos').innerHTML = (this.view3d.mode === 'walk' ? '<option value="walk">目前漫遊位置</option>' : '')
+      + P.rooms.map((r) => `<option value="room:${r.id}" ${here && here.id === r.id && this.view3d.mode !== 'walk' ? 'selected' : ''}>${esc(r.name || '房間')} 中央</option>`).join('');
+    this.syncRenderOutput();
     m.hidden = false;
+  }
+
+  syncRenderOutput() {
+    const pano = $('#rOutput').value === 'pano';
+    $('#rPanoPosField').hidden = !pano;
+    $('#rAspect').disabled = pano;
+    if (pano) $('#rCeiling').checked = true; // 環景在室內拍攝，需要天花板
+    $('#rCeiling').disabled = pano;
+  }
+
+  // 環景拍攝點（公尺）與預設面向
+  panoOrigin() {
+    const v = this.view3d, P = store.project;
+    const sel = $('#rPanoPos').value;
+    if (sel === 'walk' || !sel) {
+      const dir = new THREE.Vector3(); v.camera.getWorldDirection(dir);
+      return { pos: v.camera.position.clone(), yaw: Math.atan2(-dir.x, -dir.z), label: '漫遊位置' };
+    }
+    const room = P.rooms.find((r) => `room:${r.id}` === sel);
+    if (!room) return null;
+    let [cx, cy] = polygonCentroid(room.points);
+    if (!pointInPolygon(cx, cy, room.points)) { const r = largestInnerRect(room.points); cx = (r.x0 + r.x1) / 2; cy = (r.y0 + r.y1) / 2; }
+    // 面向房間較長的方向
+    const xs = room.points.map((p) => p[0]), ys = room.points.map((p) => p[1]);
+    const wide = Math.max(...xs) - Math.min(...xs) >= Math.max(...ys) - Math.min(...ys);
+    const f = wide ? [1, 0] : [0, 1];
+    return { pos: new THREE.Vector3(cx / 100, 1.5, cy / 100), yaw: Math.atan2(-f[0], -f[1]), label: room.name || '房間' };
+  }
+
+  // 顯示 360° 檢視（拖曳環顧）或切回平面圖片
+  showPano(on) {
+    const host = $('#renderHost');
+    this.panoViewer?.dispose();
+    this.panoViewer = null;
+    const url = this.studio.toDataURL();
+    if (!url) return;
+    if (on) {
+      const img = new Image();
+      img.onload = () => {
+        host.replaceChildren();
+        host.classList.add('pano');
+        this.panoViewer = mountPano(host, img, { yaw: this.lastPano?.yaw || 0 });
+      };
+      img.src = url;
+      $('[data-render="toggle360"]').textContent = '平面圖片';
+    } else {
+      host.classList.remove('pano');
+      const img = new Image(); img.src = url;
+      host.replaceChildren(img);
+      $('[data-render="toggle360"]').textContent = '360° 檢視';
+    }
+  }
+
+  downloadPanoHTML() {
+    const src = this.studio.toDataURL();
+    if (!src || !this.lastPano) return;
+    // 網頁內嵌 JPEG 以縮小檔案
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement('canvas'); c.width = img.width; c.height = img.height;
+      c.getContext('2d').drawImage(img, 0, 0);
+      const html = panoViewerHTML(c.toDataURL('image/jpeg', 0.9), `${store.project.name} · ${this.lastPano.label}`, this.lastPano.yaw);
+      const blob = new Blob([html], { type: 'text/html' });
+      const url = URL.createObjectURL(blob);
+      download(url, `${store.project.name}-360環景.html`);
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+    };
+    img.src = src;
   }
 
   closeRender() {
     this.studio?.stop();
+    this.panoViewer?.dispose(); this.panoViewer = null;
     this.renderTitle(null);
     this.renderButtons(false);
     $('#renderModal').hidden = true;
@@ -963,7 +1042,11 @@ class App {
   renderButtons(running) {
     $('[data-render="start"]').disabled = running;
     $('[data-render="stop"]').disabled = !running;
-    $('[data-render="download"]').disabled = running || !this.studio?.renderer;
+    $('[data-render="download"]').disabled = running || !(this.studio?.renderer || this.studio?.resultURL);
+    const pano = !!this.lastPano && !running;
+    $('[data-render="html"]').hidden = !this.lastPano;
+    $('[data-render="html"]').disabled = !pano;
+    $('[data-render="toggle360"]').hidden = !pano;
   }
 
   startRender() {
@@ -973,6 +1056,15 @@ class App {
       exposure: Number($('#rExposure').value), sunRotate: Number($('#rSun').value),
       toneMapping: $('#rTone').value, autoExposure: $('#rAuto').checked, denoise: $('#rDenoise').checked, detail: $('#rDetail').checked,
     };
+    if ($('#rOutput').value === 'pano') {
+      const o = this.panoOrigin();
+      if (!o) { toast('請先建立房間，或進入漫遊後再拍攝 360° 環景'); return; }
+      Object.assign(opts, { panorama: true, panoPos: o.pos, ceiling: true });
+      this.pendingPano = o;
+    } else this.pendingPano = null;
+    this.panoViewer?.dispose(); this.panoViewer = null;
+    $('#renderHost').classList.remove('pano');
+    this.lastPano = null;
     this.renderOpts = opts;
     if (!store.project.walls.length && !store.project.items.length) { toast('平面圖是空的，請先畫牆或放家具'); return; }
     this.studio.dispose();
@@ -990,7 +1082,9 @@ class App {
         });
       },
       onDone: ({ samples, elapsed, W, H, engine, reason, partial }) => {
+        this.lastPano = this.pendingPano;
         this.renderButtons(false);
+        if (this.lastPano) this.showPano(true);
         if (partial) {
           this.renderProgress({ pct: 100, done: true, text: `渲染途中顯示卡輸出異常，已保留取樣 ${samples} 次的畫面。原因：${reason}`, eta: '已保留最後正常畫面' });
           toast('渲染途中顯示卡輸出異常，已保留最後一張正常畫面；可改用較低品質或相容模式');

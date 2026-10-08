@@ -19,9 +19,9 @@ export const RENDER_TIMES = {
 
 // 品質：長邊像素、取樣次數、光線反彈次數
 export const RENDER_QUALITY = {
-  draft: { name: '草稿（最快）', long: 960, samples: 48, bounces: 4 },
-  standard: { name: '標準', long: 1440, samples: 200, bounces: 5 },
-  fine: { name: '精細（耗時較長）', long: 1920, samples: 600, bounces: 6 },
+  draft: { name: '草稿（最快）', long: 960, pano: 2048, samples: 48, bounces: 4 },
+  standard: { name: '標準', long: 1440, pano: 3072, samples: 200, bounces: 5 },
+  fine: { name: '精細（耗時較長）', long: 1920, pano: 4096, samples: 600, bounces: 6 },
 };
 
 export const RENDER_TONES = { neutral: '自然（色彩準確）', agx: '電影感（高光柔和）', aces: '鮮明（對比強）' };
@@ -48,6 +48,8 @@ export class RenderStudio {
   // 依選項計算輸出尺寸
   size(opts) {
     const q = RENDER_QUALITY[opts.quality] || RENDER_QUALITY.standard;
+    // 360° 環景：等距柱狀 2:1
+    if (opts.panorama) return { W: q.pano, H: q.pano / 2 };
     let ratio;
     if (opts.aspect === 'view' || !opts.aspect) ratio = this.v.camera.aspect || 16 / 9;
     else { const [a, b] = opts.aspect.split(':').map(Number); ratio = a / b; }
@@ -148,7 +150,7 @@ export class RenderStudio {
         scene.add(l);
       }
     }
-    this.disposables.push(...realisticMaterials(scene, { lights: opts.lights, normalMaps: opts.detail !== false }));
+    this.disposables.push(...realisticMaterials(scene, { lights: opts.lights, normalMaps: opts.detail !== false, raster: !pathTracing }));
     return scene;
   }
 
@@ -203,9 +205,16 @@ export class RenderStudio {
       renderer.debug.onShaderError = (gl, program) => { this.glError = `著色器編譯失敗：${(gl.getProgramInfoLog(program) || '').slice(0, 160)}`; };
       renderer.domElement.addEventListener('webglcontextlost', (e) => { e.preventDefault(); this.glError = '顯示卡記憶體不足或驅動程式中斷（WebGL context lost）'; });
 
-      const camera = this.v.camera.clone();
-      camera.aspect = W / H;
-      camera.updateProjectionMatrix();
+      let camera;
+      if (opts.panorama) {
+        camera = new mod.EquirectCamera();
+        camera.position.copy(opts.panoPos);
+        camera.updateMatrixWorld();
+      } else {
+        camera = this.v.camera.clone();
+        camera.aspect = W / H;
+        camera.updateProjectionMatrix();
+      }
       this.camera = camera;
 
       onProgress?.({ stage: 'scene', samples: 0, total: q.samples });
@@ -219,13 +228,13 @@ export class RenderStudio {
       pt.fadeDuration = 0;
       pt.minSamples = 1;
       pt.dynamicLowRes = false;
-      pt.rasterizeScene = true;
+      pt.rasterizeScene = !opts.panorama; // 環景無法用一般畫面預覽
       pt.bounces = q.bounces;
       pt.filterGlossyFactor = 0.8; // 降低光滑表面多次反射產生的亮點雜訊
       // 所有材質貼圖會合併成一組貼圖陣列，尺寸越大越吃顯示卡記憶體；512 可大幅降低記憶體不足造成的黑畫面
       pt.textureSize.set(512, 512);
       // 分塊計算：每次只算一小塊（約 6 萬像素），避免單次運算太久被顯示卡驅動程式中斷（Windows TDR）造成黑畫面
-      const tilesN = Math.min(8, Math.max(2, Math.ceil(Math.sqrt((W * H) / 60000))));
+      const tilesN = Math.min(14, Math.max(2, Math.ceil(Math.sqrt((W * H) / 60000))));
       pt.tiles.set(tilesN, tilesN);
       if (opts.denoise !== false) this.useDenoise(pt, mod);
       pt.setScene(scene, camera);
@@ -434,8 +443,9 @@ export class RenderStudio {
       this.sunLight = null;
       const scene = this.buildScene(opts, mod);
       this.scene = scene;
-      // 光線追蹤會自動計算反彈光，相容模式以半球光補足室內亮度
-      scene.add(new THREE.HemisphereLight(t.sky, t.ground, opts.time === 'night' ? 0.15 : 0.9 * t.env + 0.3));
+      // 光線追蹤會自動計算反彈光，相容模式以中性的半球光補足室內亮度（用天空藍色會讓整個室內偏藍）
+      scene.add(new THREE.HemisphereLight(opts.time === 'night' ? '#3a3f4a' : '#f4f1ea', t.ground, opts.time === 'night' ? 0.15 : 0.55 * t.env + 0.35));
+      scene.environmentIntensity = 0.45;
       if (this.sunLight) {
         const sun = this.sunLight;
         sun.castShadow = true;
@@ -448,12 +458,59 @@ export class RenderStudio {
         sun.shadow.radius = 4;
       }
       scene.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+      this.baseExposure = t.exposure;
+      this.userExposure = opts.exposure ?? 1;
+      if (opts.panorama) {
+        // 相容模式環景：先拍六面立方體，再轉成等距柱狀圖
+        const cubeRT = new THREE.WebGLCubeRenderTarget(Math.min(2048, W / 2), { type: THREE.HalfFloatType });
+        const cubeCam = new THREE.CubeCamera(0.05, 300, cubeRT);
+        cubeCam.position.copy(opts.panoPos);
+        scene.add(cubeCam);
+        const qm = new THREE.ShaderMaterial({
+          uniforms: { cube: { value: cubeRT.texture } },
+          vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
+          fragmentShader: `uniform samplerCube cube; varying vec2 vUv;
+            void main(){
+              float theta = (vUv.x - 0.5) * 6.283185307, phi = (1.0 - vUv.y) * 3.141592654;
+              vec3 d = vec3(sin(phi) * cos(theta), cos(phi), sin(phi) * sin(theta));
+              gl_FragColor = vec4(textureCube(cube, d).rgb, 1.0);
+              #include <tonemapping_fragment>
+              #include <colorspace_fragment>
+            }`,
+          depthTest: false, depthWrite: false,
+        });
+        qm.toneMapped = true;
+        const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), qm);
+        quad.frustumCulled = false;
+        const qcam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+        this.disposables.push(cubeRT, qm, quad.geometry);
+        let captured = false;
+        this.camera = qcam;
+        this.reblit = () => {
+          if (!captured) {
+            // 先正常渲染一次，讓天空貼圖完成轉換（在拍攝立方體途中轉換會造成部分面全黑）
+            const warm = new THREE.PerspectiveCamera(90, 1, 0.05, 300);
+            warm.position.copy(opts.panoPos);
+            renderer.render(scene, warm);
+            cubeCam.update(renderer, scene);
+            captured = true;
+          }
+          renderer.render(quad, qcam);
+        };
+        requestAnimationFrame(() => {
+          if (!this.running) return;
+          this.reblit();
+          if (opts.autoExposure !== false) this.autoExpose(t.key);
+          this.running = false;
+          this.rasterScene = scene;
+          onDone?.({ samples: 1, elapsed: (performance.now() - t0) / 1000, W, H, engine: 'raster', reason: this.fallbackReason });
+        });
+        return;
+      }
       const camera = this.v.camera.clone();
       camera.aspect = W / H;
       camera.updateProjectionMatrix();
       this.camera = camera;
-      this.baseExposure = t.exposure;
-      this.userExposure = opts.exposure ?? 1;
       this.reblit = () => renderer.render(scene, camera);
       requestAnimationFrame(() => {
         if (!this.running) return;
