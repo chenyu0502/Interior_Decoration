@@ -8,6 +8,7 @@ import { wallJoins, projectBounds } from '../core/model.js';
 import { CATALOG_MAP, buildItemObject, buildOpeningObject } from '../data/catalog.js';
 import { materialCanvas, getMaterial } from '../data/materials.js';
 import { paletteFor } from '../data/styles.js';
+import { enableGyro } from './pano-viewer.js';
 
 const S = 0.01; // 公分 → 公尺
 
@@ -65,7 +66,7 @@ export class View3D {
     this.texCache = new Map();
     this.structKey = '';
     this.mode = 'orbit';
-    this.walk = { yaw: 0, pitch: 0, keys: new Set(), pos: new THREE.Vector3() };
+    this.walk = { yaw: 0, pitch: 0, keys: new Set(), pos: new THREE.Vector3(), joy: { x: 0, y: 0 }, gyro: null, gyroOffset: null };
     this.raycaster = new THREE.Raycaster();
     this.selectionBox = new THREE.BoxHelper(undefined, 0x2563eb);
     this.selectionBox.visible = false;
@@ -339,12 +340,25 @@ export class View3D {
       this.controls.enabled = false;
       this.camera.fov = 70; this.camera.updateProjectionMatrix();
     } else {
+      this.setGyro(false);
+      this.walk.joy.x = this.walk.joy.y = 0;
       this.controls.enabled = true;
       this.camera.fov = 55; this.camera.updateProjectionMatrix();
       this.resetView();
       this.app.onVisitor?.(null);
     }
     this.needsSync = true;
+  }
+
+  // 漫遊陀螺儀：回傳是否成功開啟
+  async setGyro(on) {
+    if (!on) { this.walk.gyroStop?.(); this.walk.gyroStop = null; this.walk.gyro = null; return false; }
+    if (this.walk.gyroStop) return true;
+    const stop = await enableGyro((v) => { this.walk.gyro = v; });
+    if (!stop) return false;
+    this.walk.gyroStop = stop;
+    this.walk.gyroOffset = null;
+    return true;
   }
 
   _walkStep(dt) {
@@ -359,8 +373,19 @@ export class View3D {
     if (k.has('KeyA') || k.has('ArrowLeft')) mv.sub(right);
     if (k.has('KeyQ')) this.walk.yaw += dt * 1.6;
     if (k.has('KeyE')) this.walk.yaw -= dt * 1.6;
+    // 手機虛擬搖桿：上下前進後退、左右平移
+    const j = this.walk.joy;
+    if (j.x || j.y) { mv.addScaledVector(fwd, -j.y); mv.addScaledVector(right, j.x); }
+    // 陀螺儀：以開啟當下的方向為基準，跟著手機轉動視角
+    const g = this.walk.gyro;
+    if (g) {
+      if (this.walk.gyroOffset === null) this.walk.gyroOffset = this.walk.yaw - g.yaw;
+      const ty = g.yaw + this.walk.gyroOffset;
+      this.walk.yaw += Math.atan2(Math.sin(ty - this.walk.yaw), Math.cos(ty - this.walk.yaw)) * 0.35;
+      this.walk.pitch += (clamp(g.pitch, -1.2, 1.2) - this.walk.pitch) * 0.35;
+    }
     if (mv.lengthSq() > 0) {
-      mv.normalize().multiplyScalar(speed);
+      mv.multiplyScalar(speed / Math.max(1, mv.length()));
       const next = this.walk.pos.clone().add(mv);
       if (!this._collides(this.walk.pos, next)) this.walk.pos.copy(next);
     }
@@ -423,7 +448,7 @@ export class View3D {
     c.addEventListener('pointerdown', (e) => {
       c.focus();
       this.down = { x: e.clientX, y: e.clientY, button: e.button };
-      if (this.mode === 'walk') { this.lookDrag = { x: e.clientX, y: e.clientY, yaw: this.walk.yaw, pitch: this.walk.pitch }; c.setPointerCapture(e.pointerId); return; }
+      if (this.mode === 'walk') { this.lookDrag = { x: e.clientX, y: e.clientY, yaw: this.walk.yaw, pitch: this.walk.pitch, offset: this.walk.gyroOffset }; c.setPointerCapture(e.pointerId); return; }
       if (e.button !== 0) return;
       const hit = this.pick(e);
       if (hit?.type === 'item') {
@@ -439,6 +464,11 @@ export class View3D {
     });
     c.addEventListener('pointermove', (e) => {
       if (this.lookDrag) {
+        if (this.walk.gyro && this.walk.gyroOffset !== null) {
+          // 陀螺儀開啟時，拖曳只調整水平基準方向
+          this.walk.gyroOffset = this.lookDrag.offset - (e.clientX - this.lookDrag.x) * 0.004;
+          return;
+        }
         this.walk.yaw = this.lookDrag.yaw - (e.clientX - this.lookDrag.x) * 0.004;
         this.walk.pitch = clamp(this.lookDrag.pitch - (e.clientY - this.lookDrag.y) * 0.004, -1.2, 1.2);
         return;

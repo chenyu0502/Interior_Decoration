@@ -52,6 +52,7 @@ class App {
     this.buildAIPanel();
     this.bindTopbar();
     this.bindKeys();
+    this.bindWalkTouch();
     store.on('select', () => this.renderProps());
     store.on('change', (reason) => {
       if (!['move', 'resize'].includes(reason)) this.renderProps();
@@ -1104,12 +1105,50 @@ class App {
     });
   }
 
+  // 手機漫遊：虛擬搖桿（前後左右移動）與陀螺儀（轉動手機看四周）
+  bindWalkTouch() {
+    const joy = $('#walkJoy'), knob = joy.querySelector('i');
+    let id = null;
+    const set = (e) => {
+      const r = joy.getBoundingClientRect();
+      let x = (e.clientX - (r.left + r.width / 2)) / (r.width / 2), y = (e.clientY - (r.top + r.height / 2)) / (r.height / 2);
+      const len = Math.hypot(x, y);
+      if (len > 1) { x /= len; y /= len; }
+      this.view3d.walk.joy.x = Math.abs(x) < 0.12 ? 0 : x;
+      this.view3d.walk.joy.y = Math.abs(y) < 0.12 ? 0 : y;
+      knob.style.transform = `translate(${x * 33}px, ${y * 33}px)`;
+    };
+    const end = () => { id = null; this.view3d.walk.joy.x = this.view3d.walk.joy.y = 0; knob.style.transform = ''; };
+    joy.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); id = e.pointerId; try { joy.setPointerCapture(id); } catch { /* 部分瀏覽器不支援 */ } set(e); });
+    joy.addEventListener('pointermove', (e) => { if (e.pointerId === id) set(e); });
+    joy.addEventListener('pointerup', end);
+    joy.addEventListener('pointercancel', end);
+    $('#gyroBtn').addEventListener('click', async () => {
+      const b = $('#gyroBtn');
+      const on = !b.classList.contains('on');
+      const ok = await this.view3d.setGyro(on);
+      b.classList.toggle('on', on && ok);
+      b.textContent = on && ok ? '◉ 陀螺儀開啟中' : '◎ 陀螺儀';
+      if (on && !ok) toast('此裝置或瀏覽器無法使用陀螺儀（需要 HTTPS 並允許「動作與方向」權限）');
+      else if (on) toast('轉動手機即可環顧四周；拖曳畫面可調整水平方向');
+    });
+  }
+
   toggleWalk() {
     const walking = this.view3d.mode !== 'walk';
-    if (walking && this.isMode('2d')) this.setView('split');
+    const touch = ('ontouchstart' in window) || (navigator.maxTouchPoints || 0) > 0;
+    // 手機漫遊改為 3D 全畫面，離開時回到原本的版面
+    if (walking && touch) { this.viewBeforeWalk = ['2d', 'split', '3d'].find((m) => this.isMode(m)); this.setView('3d'); }
+    else if (walking && this.isMode('2d')) this.setView('split');
+    else if (!walking && touch && this.viewBeforeWalk) { this.setView(this.viewBeforeWalk); this.viewBeforeWalk = null; }
     this.view3d.setMode(walking ? 'walk' : 'orbit');
     $('#walkBtn').classList.toggle('on', walking);
     $('#walkHelp').hidden = !walking;
+    // 觸控裝置：顯示虛擬搖桿與陀螺儀按鈕
+    $('#walkTouch').hidden = !walking || !touch;
+    $('#gyroBtn').hidden = typeof DeviceOrientationEvent === 'undefined';
+    $('#gyroBtn').classList.remove('on'); $('#gyroBtn').textContent = '◎ 陀螺儀';
+    if (touch) $('#walkHelp').textContent = '拖曳環顧 · 搖桿移動 · 再按「漫遊」離開';
     if (walking) this.view3d.canvas.focus();
   }
 
