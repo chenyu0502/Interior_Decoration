@@ -105,6 +105,12 @@ input, select, textarea { font: inherit; color: inherit; }
 .view-tools .btn.on { background: var(--accent); color: #fff; border-color: var(--accent); }
 .tool-hint { position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%); background: rgba(17,24,39,.82); color: #fff; font-size: 12px; padding: 5px 12px; border-radius: 999px; pointer-events: none; white-space: nowrap; max-width: 95%; overflow: hidden; text-overflow: ellipsis; }
 .tool-hint:empty { display: none; }
+/* 手機漫遊：虛擬搖桿與陀螺儀 */
+.walk-touch { position: absolute; inset: auto 14px 48px 14px; display: flex; justify-content: space-between; align-items: flex-end; pointer-events: none; }
+.walk-touch > * { pointer-events: auto; }
+.joy { width: 112px; height: 112px; border-radius: 50%; background: rgba(17,24,39,.35); border: 2px solid rgba(255,255,255,.55); position: relative; touch-action: none; }
+.joy i { position: absolute; left: 50%; top: 50%; width: 46px; height: 46px; margin: -23px 0 0 -23px; border-radius: 50%; background: rgba(255,255,255,.85); box-shadow: 0 2px 8px rgba(0,0,0,.3); }
+#gyroBtn.on { background: var(--accent); color: #fff; border-color: var(--accent); }
 .walk-help { position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); background: rgba(17,24,39,.82); color: #fff; font-size: 12px; padding: 6px 14px; border-radius: 999px; pointer-events: none; }
 
 /* ---------- 屬性面板 */
