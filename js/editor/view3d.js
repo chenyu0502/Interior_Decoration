@@ -209,7 +209,8 @@ export class View3D {
       floor.userData = { roomId: r.id };
       this.structure.add(floor);
       if ((P.settings.showCeiling && !P.settings.cutaway) || this.mode === 'walk') {
-        const cg = new THREE.ShapeGeometry(shape);
+        // 天花板朝下：形狀以 (x, y) 建立再轉 +90°，位置才會與地板重疊（地板用 (x, -y) 轉 -90°）
+        const cg = new THREE.ShapeGeometry(new THREE.Shape(r.points.map(([x, y]) => new THREE.Vector2(x * S, y * S))));
         cg.rotateX(Math.PI / 2);
         const ceil = new THREE.Mesh(cg, new THREE.MeshStandardMaterial({ color: '#fbfaf7', roughness: 0.95 }));
         ceil.position.y = P.settings.wallHeight * S;

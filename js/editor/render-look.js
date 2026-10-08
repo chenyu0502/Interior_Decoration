@@ -67,7 +67,7 @@ function physical(src) {
 }
 
 // 將場景材質換成寫實版本（複製後替換，不影響編輯畫面）
-export function realisticMaterials(root, { lights = false, normalMaps = true } = {}) {
+export function realisticMaterials(root, { lights = false, normalMaps = true, raster = false } = {}) {
   const map = new Map();
   const made = [];
   const convert = (m) => {
@@ -91,6 +91,8 @@ export function realisticMaterials(root, { lights = false, normalMaps = true } =
     } else if (kind) {
       switch (kind) {
         case 'glass':
+          // 相容模式（一般即時渲染）的穿透折射在拍攝環景時會出錯，維持半透明玻璃
+          if (raster) break;
           r = new THREE.MeshPhysicalMaterial({ color: '#ffffff', metalness: 0, roughness: 0.02, transmission: 1, ior: 1.5, thickness: 0.006, transparent: false });
           // 有色玻璃：以門窗設定的顏色做為穿透衰減色
           r.attenuationColor = m.color.clone(); r.attenuationDistance = 0.4;
@@ -139,14 +141,15 @@ export function makeSky({ zenith, horizon, ground, env = 1, sun = null, sunIrrad
   const dTheta = (2 * Math.PI) / W, dPhi = Math.PI / H;
   // 地面亮度：天空與太陽照在地面後的反射
   const groundLum = 0.25 * env + (sun ? (sunIrradiance * Math.max(0, sunDir.y)) / Math.PI * 0.35 : 0);
-  const d = new THREE.Vector3(), sph = new THREE.Spherical(), c = new THREE.Color();
+  const d = new THREE.Vector3(), c = new THREE.Color();
   const disk = [];
   let diskSolid = 0;
   for (let y = 0; y < H; y++) {
     const phi = (1 - y / H) * Math.PI; // 與 three-gpu-pathtracer 的等距柱狀座標一致
     for (let x = 0; x < W; x++) {
-      sph.set(1, phi, (x / W - 0.5) * 2 * Math.PI);
-      d.setFromSpherical(sph);
+      // 與光線追蹤引擎的 equirectUvToDirection 相同：x = sinφ·cosθ、z = sinφ·sinθ
+      const theta = (x / W - 0.5) * 2 * Math.PI, sp = Math.sin(phi);
+      d.set(sp * Math.cos(theta), Math.cos(phi), sp * Math.sin(theta));
       const i = (y * W + x) * 4;
       if (d.y >= 0) {
         const t = Math.pow(d.y, 0.45);
