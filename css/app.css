@@ -191,21 +191,37 @@ input, select, textarea { font: inherit; color: inherit; }
   .layout { grid-template-columns: 240px 1fr 240px; }
   .tool span { display: none; }
 }
+.mobile-bar, .sheet-head { display: none; }
 @media (max-width: 820px) {
-  html, body { height: auto; }
-  body { overflow: auto; display: block; }
-  .layout { display: flex; flex-direction: column; }
-  .views { height: 78vh; min-height: 460px; flex: none; }
-  .tool-hint { display: none; }
-  .sidebar.left { max-height: none; }
-  .sidebar.left { order: 2; max-height: 50vh; border-right: 0; border-top: 1px solid var(--line); }
-  .views { order: 1; }
-  .sidebar.right { order: 3; border-left: 0; border-top: 1px solid var(--line); }
+  /* 手機版：畫面滿版，目錄與屬性改為底部滑出面板 */
+  html, body { height: 100%; }
+  body { overflow: hidden; display: flex; flex-direction: column; }
+  .layout { display: block; position: relative; flex: 1; min-height: 0; }
+  .views { position: absolute; inset: 0; height: auto; min-height: 0; }
   .views.mode-split { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; }
+  .tool-hint { display: none; }
+  .statusbar { display: none; }
+  .sidebar.left, .sidebar.right {
+    position: fixed; left: 0; right: 0; bottom: calc(58px + env(safe-area-inset-bottom)); height: 62vh; max-height: none; z-index: 60;
+    border: 0; border-top: 1px solid var(--line); border-radius: 16px 16px 0 0; box-shadow: 0 -10px 30px rgba(0,0,0,.2);
+    transform: translateY(110%); visibility: hidden; transition: transform .22s ease, visibility 0s linear .22s;
+  }
+  .sidebar.open { transform: none; visibility: visible; transition: transform .22s ease; }
+  .sheet-head { display: flex; align-items: center; gap: 8px; position: sticky; top: 0; z-index: 2; background: var(--panel); padding: 8px 12px 6px; border-bottom: 1px solid var(--line); }
+  .sheet-head b { flex: 1; font-size: 14px; }
+  .sheet-head .grip { position: absolute; left: 50%; top: 4px; width: 38px; height: 4px; margin-left: -19px; border-radius: 2px; background: var(--line); }
+  .mobile-bar {
+    display: flex; position: relative; z-index: 70; height: calc(58px + env(safe-area-inset-bottom)); padding-bottom: env(safe-area-inset-bottom);
+    background: var(--panel); border-top: 1px solid var(--line);
+  }
+  .mobile-bar button { position: relative; flex: 1; border: 0; background: none; color: var(--muted); font-size: 11px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; }
+  .mobile-bar button b { font-size: 18px; line-height: 1; font-weight: 400; }
+  .mobile-bar button.on { color: var(--accent); }
+  .mobile-bar button.dot::after { content: ''; position: absolute; top: 8px; left: calc(50% + 10px); width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
   .brand small { display: none; }
   .topbar { gap: 6px; padding: 6px 8px; }
   .cards { grid-template-columns: repeat(4, 1fr); }
-  .statusbar { flex-wrap: wrap; }
+}
 }
 
 /* 寫實渲染 */

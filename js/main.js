@@ -53,6 +53,7 @@ class App {
     this.bindTopbar();
     this.bindKeys();
     this.bindWalkTouch();
+    this.bindMobileSheets();
     store.on('select', () => this.renderProps());
     store.on('change', (reason) => {
       if (!['move', 'resize'].includes(reason)) this.renderProps();
@@ -153,6 +154,12 @@ class App {
         if (armed) { this.setTool('select'); return; }
         el.classList.add('armed');
         this.setTool('place', def.id);
+        if (this.isMobileLayout()) {
+          // 手機：收起面板、確保 2D 平面圖可見，再點平面圖放置
+          this.closeSheets?.();
+          if (this.isMode('3d')) this.setView('split');
+          toast(`點 2D 平面圖要放「${def.name}」的位置`);
+        }
       });
       this.drawPlanIcon(c, def, isOpening);
       return el;
@@ -1103,6 +1110,43 @@ class App {
         $('#renderStatus').textContent = `渲染失敗：${err?.message || err}。此瀏覽器或顯示卡可能不支援 WebGL2 光線追蹤，可改用「檔案 → 匯出 3D 透視圖 PNG」。`;
       },
     });
+  }
+
+  // 手機版：底部按鈕開啟目錄（家具、門窗、材質、AI 風格）與屬性面板
+  isMobileLayout() { return window.matchMedia('(max-width: 820px)').matches; }
+
+  bindMobileSheets() {
+    const left = $('#leftPanel'), right = $('#rightPanel');
+    for (const [el, title] of [[left, '目錄'], [right, '屬性']]) {
+      const h = document.createElement('div');
+      h.className = 'sheet-head';
+      h.innerHTML = `<span class="grip"></span><b>${title}</b><button class="icon-btn" data-sheet-close title="收起">✕</button>`;
+      el.prepend(h);
+    }
+    const bar = $('#mobileBar');
+    this.closeSheets = () => {
+      left.classList.remove('open'); right.classList.remove('open');
+      $$('button', bar).forEach((b) => b.classList.remove('on'));
+    };
+    bar.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-sheet]');
+      if (!b) return;
+      const s = b.dataset.sheet;
+      const wasOn = b.classList.contains('on');
+      this.closeSheets();
+      if (wasOn) return;
+      if (s === 'props') { right.classList.add('open'); b.classList.remove('dot'); }
+      else { this.showTab(s); left.classList.add('open'); }
+      b.classList.add('on');
+    });
+    $$('[data-sheet-close]').forEach((x) => x.addEventListener('click', () => this.closeSheets()));
+    // 面板內切換分頁時，同步底部按鈕
+    $('#leftTabs').addEventListener('click', (e) => {
+      const t = e.target.closest('[data-tab]');
+      if (t && left.classList.contains('open')) $$('button', bar).forEach((b) => b.classList.toggle('on', b.dataset.sheet === t.dataset.tab));
+    });
+    // 選取物件時，屬性按鈕加上提示點
+    store.on('select', (sel) => { if (this.isMobileLayout() && sel && !right.classList.contains('open')) $('[data-sheet="props"]', bar).classList.add('dot'); });
   }
 
   // 手機漫遊：虛擬搖桿（前後左右移動）與陀螺儀（轉動手機看四周）
