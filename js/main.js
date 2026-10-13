@@ -14,6 +14,7 @@ import * as claude from './ai/claude.js';
 import { VERSION, CHANGELOG, compareVersions } from './version.js';
 import { Updater } from './core/updater.js';
 import { mountPano, panoViewerHTML } from './editor/pano-viewer.js';
+import { vrSupported } from './editor/vr.js';
 import { RenderStudio, RENDER_TIMES, RENDER_QUALITY, RENDER_ASPECTS, RENDER_ENGINES, RENDER_TONES } from './editor/render.js';
 import { analyzeFloorplan, buildProject, estimateScale, loadImageData } from './ai/floorplan-import.js';
 
@@ -54,6 +55,8 @@ class App {
     this.bindKeys();
     this.bindWalkTouch();
     this.bindMobileSheets();
+    // 支援 WebXR 的頭盔瀏覽器（例如 Meta Quest）才顯示 VR 按鈕
+    vrSupported().then((ok) => { $('#vrBtn').hidden = !ok; });
     store.on('select', () => this.renderProps());
     store.on('change', (reason) => {
       if (!['move', 'resize'].includes(reason)) this.renderProps();
@@ -899,6 +902,7 @@ class App {
         topView: () => this.view3d.topView(),
         walk: () => this.toggleWalk(),
         render: () => this.openRender(),
+        vr: () => this.toggleVR(),
         night: () => { store.update((p) => { p.settings.night = !p.settings.night; }, 'settings'); this.syncToggles(); },
         ceiling: () => { store.update((p) => { p.settings.showCeiling = !p.settings.showCeiling; }, 'settings'); this.syncToggles(); },
         cutaway: () => { store.update((p) => { p.settings.cutaway = !p.settings.cutaway; }, 'settings'); this.syncToggles(); },
@@ -1110,6 +1114,40 @@ class App {
         $('#renderStatus').textContent = `渲染失敗：${err?.message || err}。此瀏覽器或顯示卡可能不支援 WebGL2 光線追蹤，可改用「檔案 → 匯出 3D 透視圖 PNG」。`;
       },
     });
+  }
+
+  // VR 頭盔模式：從漫遊位置進入；不在漫遊時從畫面中心所在房間的中央進入
+  async toggleVR() {
+    const v = this.view3d;
+    if (v.vr.active) { v.vr.exit(); return; }
+    let start;
+    if (v.mode === 'walk') start = { x: v.walk.pos.x, z: v.walk.pos.z, yaw: v.walk.yaw };
+    else {
+      const P = store.project, t = v.controls.target;
+      const room = P.rooms.find((r) => pointInPolygon(t.x * 100, t.z * 100, r.points)) || P.rooms[0];
+      let x = t.x, z = t.z;
+      if (room) {
+        let [cx, cy] = polygonCentroid(room.points);
+        if (!pointInPolygon(cx, cy, room.points)) { const r = largestInnerRect(room.points); cx = (r.x0 + r.x1) / 2; cy = (r.y0 + r.y1) / 2; }
+        x = cx / 100; z = cy / 100;
+      }
+      const dir = new THREE.Vector3(); v.camera.getWorldDirection(dir);
+      start = { x, z, yaw: Math.atan2(-dir.x, -dir.z) };
+    }
+    try {
+      await v.vr.enter(start);
+      this.onVRChange(true);
+    } catch (err) {
+      console.error(err);
+      toast(`無法進入 VR：${err?.message || err}`);
+    }
+  }
+
+  onVRChange(on) {
+    $('#vrBtn').classList.toggle('on', on);
+    $('#vrBtn').textContent = on ? '◈ 離開 VR' : '◈ VR';
+    if (on) toast('VR：左搖桿移動、右搖桿轉向、按住扳機指向地板放開即可瞬間移動');
+    else if (this.view3d.mode !== 'walk') this.onVisitor(null);
   }
 
   // 手機版：底部按鈕開啟目錄（家具、門窗、材質、AI 風格）與屬性面板

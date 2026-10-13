@@ -28,6 +28,7 @@ Interior Studio：純前端靜態網頁的室內設計工具（2D 平面圖、�
 | `js/editor/view3d.js` | 3D 檢視與漫遊（含陀螺儀、虛擬搖桿） |
 | `js/editor/render.js`、`render-look.js` | 寫實渲染（光線追蹤、相容模式）、物理材質與天空 |
 | `js/editor/pano-viewer.js` | 360° 環景檢視器與檢視網頁匯出 |
+| `js/editor/vr.js` | VR 頭盔模式（WebXR、控制器移動與瞬間移動） |
 | `js/data/catalog.js` | 家具與門窗（2D 符號、3D 程序化模型、可調參數） |
 | `js/data/materials.js`、`styles.js`、`samples.js` | 材質、風格模板、範例平面圖 |
 | `js/ai/` | AI 自動設計、Claude 提案、圖片辨識平面圖 |
@@ -38,7 +39,7 @@ Interior Studio：純前端靜態網頁的室內設計工具（2D 平面圖、�
 ## 開發流程
 
 1. 從最新的 `main` 建立或重設開發分支 `claude/interior-design-web-app-wtcua0`（前一個 PR 已合併時，以 `git fetch origin main && git checkout -B claude/interior-design-web-app-wtcua0 origin/main` 重新開始）。
-2. 修改程式，並在本機啟動伺服器（`npx http-server -p 8765 -c-1`）用 Playwright 實際操作測試；手機相關功能以觸控、手機尺寸模擬測試。
+2. 修改程式，並在本機啟動伺服器（`npx http-server -p 8765 -c-1`）用 Playwright 實際操作測試；手機相關功能以觸控、手機尺寸模擬測試；VR 功能以 IWER（Immersive Web Emulation Runtime，`installRuntime({ forceInstall: true })`）模擬 Meta Quest 3 測試。
 3. 每次發布新功能或修正都要更新版本：
    - `js/version.js` 的 `VERSION`，並在 `CHANGELOG` 最前面新增一筆。
    - 同步更新 `CHANGELOG.md` 與 `package.json` 的版本號。
