@@ -9,6 +9,7 @@ import { CATALOG_MAP, buildItemObject, buildOpeningObject } from '../data/catalo
 import { materialCanvas, getMaterial } from '../data/materials.js';
 import { paletteFor } from '../data/styles.js';
 import { enableGyro } from './pano-viewer.js';
+import { VRMode } from './vr.js';
 
 const S = 0.01; // 公分 → 公尺
 
@@ -79,6 +80,7 @@ export class View3D {
     this.resize();
     store.on('change', (reason) => { this.needsSync = true; this._lastReason = reason; });
     store.on('select', () => this.updateSelection());
+    this.vr = new VRMode(this);
     this.clock = new THREE.Clock();
     this.renderer.setAnimationLoop(() => this.tick());
   }
@@ -96,6 +98,14 @@ export class View3D {
   get visible() { return this.container.offsetParent !== null && this.container.clientWidth > 2; }
 
   tick() {
+    // VR 進行中：不受頁面版面影響，持續以頭盔視角渲染
+    if (this.vr.active) {
+      const dt = Math.min(0.05, this.clock.getDelta());
+      if (this.needsSync) { this.needsSync = false; this.sync(); this.renderer.shadowMap.needsUpdate = true; }
+      this.vr.update(dt);
+      this.renderer.render(this.scene, this.camera);
+      return;
+    }
     if (!this.visible) return;
     const dt = Math.min(0.05, this.clock.getDelta());
     if (this.needsSync) { this.needsSync = false; this.sync(); }
@@ -209,7 +219,7 @@ export class View3D {
       floor.receiveShadow = true;
       floor.userData = { roomId: r.id };
       this.structure.add(floor);
-      if ((P.settings.showCeiling && !P.settings.cutaway) || this.mode === 'walk') {
+      if ((P.settings.showCeiling && !P.settings.cutaway) || this.mode === 'walk' || this.mode === 'vr') {
         // 天花板朝下：形狀以 (x, y) 建立再轉 +90°，位置才會與地板重疊（地板用 (x, -y) 轉 -90°）
         const cg = new THREE.ShapeGeometry(new THREE.Shape(r.points.map(([x, y]) => new THREE.Vector2(x * S, y * S))));
         cg.rotateX(Math.PI / 2);
@@ -289,7 +299,7 @@ export class View3D {
 
   cutHeight() {
     const P = store.project;
-    return P.settings.cutaway && this.mode !== 'walk' ? 120 : 10000;
+    return P.settings.cutaway && this.mode !== 'walk' && this.mode !== 'vr' ? 120 : 10000;
   }
 
   resetView() {
