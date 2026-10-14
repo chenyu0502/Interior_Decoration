@@ -22,6 +22,7 @@ Interior Studio：純前端靜態網頁的室內設計工具（2D 平面圖、�
 | 路徑 | 內容 |
 | --- | --- |
 | `js/main.js` | 介面控制、目錄、屬性面板、檔案、快捷鍵、渲染視窗、手機版面板 |
+| `js/ui/thumbs.js` | 選單縮圖攝影棚（家具、門窗、材質的寫實 3D 縮圖） |
 | `js/core/state.js` | 專案資料、選取、復原 / 重做、自動存檔 |
 | `js/core/geometry.js`、`js/core/model.js` | 幾何計算、房間偵測、牆與門窗關係 |
 | `js/editor/plan2d.js` | 2D 平面圖編輯器 |

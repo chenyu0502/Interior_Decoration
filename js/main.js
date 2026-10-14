@@ -4,7 +4,8 @@ import { store, emptyProject } from './core/state.js';
 import { Plan2D, isTyping } from './editor/plan2d.js';
 import { View3D } from './editor/view3d.js';
 import { CATALOG, OPENINGS, CATALOG_MAP, OPENING_MAP, CATEGORIES, buildItemObject, itemParams, openingLook, LEAF_FINISHES, FRAME_FINISHES } from './data/catalog.js';
-import { MATERIALS, MATERIAL_MAP, materialSwatchURL } from './data/materials.js';
+import { MATERIALS, MATERIAL_MAP, materialSwatchURL, setMaterialSwatch } from './data/materials.js';
+import { ThumbStudio, paintStudioBackground } from './ui/thumbs.js';
 import { STYLES, STYLE_MAP, paletteFor } from './data/styles.js';
 import { SAMPLES } from './data/samples.js';
 import { detectRooms, polygonArea, polygonCentroid, pointInPolygon, wallLength, clamp, areaText, toWallLocal, PING, largestInnerRect } from './core/geometry.js';
@@ -147,7 +148,7 @@ class App {
       el.dataset.name = def.name;
       el.title = isOpening ? `${def.name}（寬 ${def.width} × 高 ${def.height} cm）` : `${def.name}（${def.w} × ${def.d} × ${def.h} cm）`;
       const c = document.createElement('canvas');
-      c.width = c.height = 96;
+      c.width = c.height = 192; // 2 倍密度，縮圖較清晰
       el.append(c);
       const s = document.createElement('span'); s.textContent = def.name; el.append(s);
       el.addEventListener('dragstart', (e) => { e.dataTransfer.setData('application/x-catalog', def.id); e.dataTransfer.effectAllowed = 'copy'; });
@@ -184,6 +185,7 @@ class App {
 
   drawPlanIcon(c, def, isOpening) {
     const ctx = c.getContext('2d');
+    ctx.setTransform(c.width / 96, 0, 0, c.width / 96, 0, 0);
     ctx.fillStyle = '#eef0f2'; ctx.fillRect(0, 0, 96, 96);
     const pal = paletteFor(store.project.design.styleId);
     if (isOpening) {
@@ -206,40 +208,50 @@ class App {
     ctx.restore();
   }
 
+  // 寫實 3D 縮圖：家具、門窗與材質在攝影棚光線下以物理材質拍攝（閒置時逐一產生）
   renderThumbnails() {
-    let renderer;
-    try { renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true }); } catch { return; }
-    renderer.setSize(192, 192);
-    renderer.outputColorSpace = THREE.SRGBColorSpace;
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    const scene = new THREE.Scene();
-    scene.add(new THREE.HemisphereLight('#ffffff', '#9a8f80', 2.2));
-    const dl = new THREE.DirectionalLight('#ffffff', 2.2); dl.position.set(2, 4, 3); scene.add(dl);
-    const cam = new THREE.PerspectiveCamera(30, 1, 0.01, 100);
-    const queue = [...CATALOG];
+    const run = (this.thumbRun = (this.thumbRun || 0) + 1);
+    let studio;
+    try { studio = new ThumbStudio(); } catch { return; }
     const pal = paletteFor(store.project.design.styleId);
+    const queue = [
+      ...CATALOG.map((def) => ({ id: def.id, shot: () => studio.item(def, pal) })),
+      ...OPENINGS.map((def) => ({ id: def.id, shot: () => studio.opening(def, pal) })),
+    ];
+    // 材質與風格無關，只需產生一次
+    if (!this.matThumbsDone) {
+      for (const m of MATERIALS) queue.push({ mat: m.id, shot: () => studio.material(m.id) });
+    }
+    const idle = window.requestIdleCallback || ((f) => setTimeout(f, 16));
     const step = () => {
-      const def = queue.shift();
-      if (!def) { renderer.dispose(); return; }
-      const obj = buildItemObject({ kind: def.id, w: def.w, d: def.d, h: def.h, id: def.id, elev: def.elev || 0 }, pal, { ceiling: (def.elev || 0) + def.h + 30 });
-      obj.scale.setScalar(0.01);
-      obj.rotation.y = -0.6;
-      scene.add(obj);
-      const box = new THREE.Box3().setFromObject(obj);
-      const size = box.getSize(new THREE.Vector3()), center = box.getCenter(new THREE.Vector3());
-      const R = Math.max(size.x, size.y, size.z) || 1;
-      cam.position.set(center.x + R * 1.1, center.y + R * 0.95, center.z + R * 1.9);
-      cam.lookAt(center);
-      renderer.render(scene, cam);
-      const card = $(`.cards .card[data-kind="${def.id}"] canvas`);
-      if (card) {
-        const ctx = card.getContext('2d');
-        ctx.fillStyle = '#eef0f2'; ctx.fillRect(0, 0, 96, 96);
-        ctx.drawImage(renderer.domElement, 0, 0, 96, 96);
+      if (run !== this.thumbRun) { studio.dispose(); return; }
+      const job = queue.shift();
+      if (!job) {
+        studio.dispose();
+        this.matThumbsDone = true;
+        return;
       }
-      scene.remove(obj);
-      obj.traverse((o) => o.geometry?.dispose());
-      (window.requestIdleCallback || ((f) => setTimeout(f, 16)))(step);
+      try {
+        const img = job.shot();
+        if (job.mat) {
+          const s = document.createElement('canvas');
+          s.width = s.height = 160;
+          const ctx = s.getContext('2d');
+          paintStudioBackground(ctx, 160, 160);
+          ctx.drawImage(img, 0, 0, 160, 160);
+          const url = s.toDataURL('image/jpeg', 0.88);
+          setMaterialSwatch(job.mat, url);
+          for (const el of $$(`img[data-mat="${job.mat}"]`)) el.src = url;
+        } else {
+          for (const c of $$(`.cards .card[data-kind="${job.id}"] canvas`)) {
+            const ctx = c.getContext('2d');
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+            paintStudioBackground(ctx, c.width, c.height);
+            ctx.drawImage(img, 0, 0, c.width, c.height);
+          }
+        }
+      } catch (e) { console.warn('縮圖產生失敗', job.id || job.mat, e); }
+      idle(step);
     };
     setTimeout(step, 300);
   }
@@ -250,7 +262,7 @@ class App {
       el.className = 'swatch';
       el.draggable = true;
       el.title = m.name;
-      el.innerHTML = `<img alt="" src="${materialSwatchURL(m.id)}"><span>${esc(m.name)}</span>`;
+      el.innerHTML = `<img alt="" data-mat="${m.id}" src="${materialSwatchURL(m.id)}"><span>${esc(m.name)}</span>`;
       el.addEventListener('dragstart', (e) => e.dataTransfer.setData('application/x-material', m.id));
       el.addEventListener('click', () => this.applyMaterialToSelection(m.id));
       return el;
