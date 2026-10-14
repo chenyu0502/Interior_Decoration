@@ -319,12 +319,18 @@ export function materialCanvas(id) {
   return c;
 }
 
+// 材質縮圖：預設為平面貼圖；選單的 3D 材質方塊產生後以 setMaterialSwatch 取代
+const swatchCache = new Map();
+export function setMaterialSwatch(id, url) { swatchCache.set(id, url); }
 export function materialSwatchURL(id) {
+  if (swatchCache.has(id)) return swatchCache.get(id);
   const c = materialCanvas(id);
   const s = document.createElement('canvas');
   s.width = s.height = 96;
   s.getContext('2d').drawImage(c, 0, 0, RES / 2, RES / 2, 0, 0, 96, 96);
-  return s.toDataURL('image/jpeg', 0.85);
+  const url = s.toDataURL('image/jpeg', 0.85);
+  swatchCache.set(id, url);
+  return url;
 }
 
 // 家具用的細微紋理（灰階，乘上顏色使用）
