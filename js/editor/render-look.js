@@ -66,13 +66,17 @@ function physical(src) {
   return p;
 }
 
-// 將場景材質換成寫實版本（複製後替換，不影響編輯畫面）
-export function realisticMaterials(root, { lights = false, normalMaps = true, raster = false } = {}) {
-  const map = new Map();
-  const made = [];
-  const convert = (m) => {
+// 寫實材質 → 原始材質（3D 檢視已換成寫實材質時，寫實渲染從原始材質重新轉換）
+const ORIGIN = new WeakMap();
+const originOf = (m) => (m && ORIGIN.get(m)) || m;
+
+// 建立材質轉換器：同一個來源材質只轉換一次（轉換器保留結果，可重複使用）
+export function makeLook({ lights = false, normalMaps = true, raster = false } = {}, made = []) {
+  const map = new WeakMap(); // 來源材質不再使用時自動釋放
+  return (m) => {
+    m = originOf(m);
     if (!m || !m.isMeshStandardMaterial) return m;
-    if (map.has(m.uuid)) return map.get(m.uuid);
+    if (map.has(m)) return map.get(m);
     let r = m;
     const kind = m.userData?.kind;
     if (m.userData?.matId) {
@@ -115,13 +119,20 @@ export function realisticMaterials(root, { lights = false, normalMaps = true, ra
         default: break;
       }
     }
-    if (r !== m) made.push(r);
-    map.set(m.uuid, r);
+    if (r !== m) { made.push(r); ORIGIN.set(r, m); }
+    map.set(m, r);
     return r;
   };
+}
+
+// 將場景材質換成寫實版本（複製後替換，不影響編輯畫面）
+export function realisticMaterials(root, opts = {}) {
+  const made = [];
+  const convert = makeLook(opts, made);
   root.traverse((o) => {
     if (!o.isMesh) return;
-    o.material = Array.isArray(o.material) ? o.material.map(convert) : convert(o.material);
+    // 3D 檢視已換成寫實材質的物件，從原始材質重新轉換
+    o.material = Array.isArray(o.material) ? o.material.map((m) => convert(originOf(m))) : convert(originOf(o.material));
   });
   return made;
 }
