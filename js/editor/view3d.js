@@ -173,29 +173,47 @@ export class View3D {
 
   // ---------------------------------------------------- 門的開關（漫遊時點門）
   // 收集每扇門的門片；重建牆體後依目前開關狀態擺好
+  // 門窗以整扇（所有門片 / 窗扇一起）開關；家具的每扇門、每個抽屜各自開關（鍵為「物件編號#序號」）
   collectDoors() {
-    this.doors = new Map();
-    this.doorRoots = new Map(); // 門的整體（含門框），用來判斷點在門口範圍
+    this.doors = this.doors || new Map();
+    for (const k of [...this.doors.keys()]) if (!k.includes('#')) this.doors.delete(k);
+    this.doorRoots = new Map(); // 門窗的整體（含門框），用來判斷點在門口範圍
     this.structure.traverse((o) => {
       const oid = o.userData.openingId;
       if (oid && o.parent?.userData.openingId !== oid && !this.doorRoots.has(oid)) this.doorRoots.set(oid, o);
       const d = o.userData.door;
       if (!d) return;
-      const id = o.userData.openingId;
-      if (!this.doors.has(id)) this.doors.set(id, []);
-      this.doors.get(id).push({ obj: o, door: d, x0: o.position.x });
+      o.userData.partKey = oid;
+      if (!this.doors.has(oid)) this.doors.set(oid, []);
+      this.doors.get(oid).push({ obj: o, door: d, x0: o.position.x, z0: o.position.z });
     });
     this.doorState = this.doorState || new Map();
-    for (const id of this.doors.keys()) this.poseDoor(id);
+    for (const [id] of this.doors) if (!id.includes('#')) this.poseDoor(id);
+  }
+
+  collectItemParts(obj, itemId) {
+    this.doors = this.doors || new Map();
+    this.doorState = this.doorState || new Map();
+    for (const k of [...this.doors.keys()]) if (k.startsWith(`${itemId}#`)) this.doors.delete(k);
+    let n = 0;
+    obj.traverse((o) => {
+      const d = o.userData.door;
+      if (!d) return;
+      const key = `${itemId}#${n++}`;
+      o.userData.partKey = key;
+      this.doors.set(key, [{ obj: o, door: d, x0: o.position.x, z0: o.position.z }]);
+      this.poseDoor(key);
+    });
   }
 
   poseDoor(id) {
     const st = this.doorState.get(id);
     const p = st ? st.p : 0;
     const e = p * p * (3 - 2 * p); // 緩入緩出
-    for (const { obj, door, x0 } of this.doors.get(id) || []) {
+    for (const { obj, door, x0, z0 } of this.doors.get(id) || []) {
       if (door.type === 'swing') obj.rotation.y = door.angle * e;
-      else obj.position.x = x0 + door.dx * e;
+      else if (door.type === 'flip') obj.rotation.x = door.angle * e;
+      else { obj.position.x = x0 + (door.dx || 0) * e; obj.position.z = z0 + (door.dz || 0) * e; }
     }
   }
 
@@ -228,13 +246,28 @@ export class View3D {
     this.raycaster.setFromCamera(this._ndc(e), this.camera);
     this.raycaster.far = 3.5;
     const hit = this.raycaster.intersectObjects([this.structure, this.itemsGroup], true)[0];
+    // 點到門片、抽屜或窗扇本身
+    for (let o = hit?.object; o; o = o.parent) if (o.userData.partKey) return o.userData.partKey;
     const id = hit?.object.userData.openingId;
     if (id && this.doors.has(id)) return id;
+    // 點到櫃體：開關離點擊位置最近的門片或抽屜（50 公分內）
+    const itemId = hit?.object.userData.itemId;
+    if (itemId) {
+      let near = null, nd = 0.5;
+      const c = new THREE.Vector3();
+      for (const [k, parts] of this.doors) {
+        if (!k.startsWith(`${itemId}#`)) continue;
+        new THREE.Box3().setFromObject(parts[0].obj).getCenter(c);
+        const dd = c.distanceTo(hit.point);
+        if (dd < nd) { nd = dd; near = k; }
+      }
+      if (near) return near;
+    }
     // 門已打開時點門口中間：檢查視線是否穿過門框範圍
     const ray = this.raycaster.ray, p = new THREE.Vector3();
     let best = null, bestD = hit ? hit.distance + 0.05 : 3.5;
     for (const oid of this.doors.keys()) {
-      const root = this.doorRoots.get(oid);
+      const root = this.doorRoots?.get(oid);
       if (!root) continue;
       const box = new THREE.Box3().setFromObject(root);
       if (!ray.intersectBox(box, p)) continue;
@@ -366,6 +399,7 @@ export class View3D {
         obj.userData = { itemId: it.id };
         inner.traverse((o) => { o.userData.itemId = it.id; });
         this.applyLook(obj);
+        this.collectItemParts(obj, it.id);
         this.itemsGroup.add(obj);
         entry = { key, obj };
         this.itemCache.set(it.id, entry);
@@ -376,7 +410,10 @@ export class View3D {
       entry.obj.rotation.y = -THREE.MathUtils.degToRad(it.rot || 0);
     }
     for (const [id, e] of this.itemCache) {
-      if (!seen.has(id)) { this.itemsGroup.remove(e.obj); e.obj.traverse((o) => o.geometry?.dispose()); this.itemCache.delete(id); }
+      if (!seen.has(id)) {
+        this.itemsGroup.remove(e.obj); e.obj.traverse((o) => o.geometry?.dispose()); this.itemCache.delete(id);
+        for (const k of [...(this.doors?.keys() || [])]) if (k.startsWith(`${id}#`)) { this.doors.delete(k); this.doorState?.delete(k); }
+      }
     }
   }
 
