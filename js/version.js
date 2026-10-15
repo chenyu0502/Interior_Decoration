@@ -5,9 +5,16 @@
 //   次版號：新增功能
 //   修訂號：錯誤修正
 
-export const VERSION = '1.21.0';
+export const VERSION = '1.22.0';
 
 export const CHANGELOG = [
+  {
+    version: '1.22.0',
+    date: '2026-10-15',
+    notes: [
+      '浴櫃洗手台改為可開的雙門櫃（內有排水管），書桌與化妝台的抽屜可拉出，淋浴間的玻璃門可開關（附門把）；漫遊時點擊即可開關。',
+    ],
+  },
   {
     version: '1.21.0',
     date: '2026-10-15',
