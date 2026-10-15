@@ -125,6 +125,7 @@ export class View3D {
     if (this.needsSync) { this.needsSync = false; this.sync(); changed = true; }
     if (this.mode === 'walk') this._walkStep(dt);
     else this.controls.update();
+    if (this.animateDoors(dt)) changed = true;
     if (this.selectionBox.visible && this.selectionBox.object) this.selectionBox.update();
     // 視角有變動就取消實景照片
     this.camera.updateMatrixWorld();
@@ -159,6 +160,7 @@ export class View3D {
       this.structKey = sKey;
       this.buildStructure(pal);
       this.applyLook(this.structure);
+      this.collectDoors();
     }
     this.syncItems(pal, palKey);
     this.applyLighting();
@@ -167,6 +169,79 @@ export class View3D {
     if (night !== this._lookNight) { this._lookNight = night; this.applyLook(this.structure); this.applyLook(this.itemsGroup); }
     if (this.firstBuild && (P.walls.length || P.items.length)) { this.firstBuild = false; this.resetView(); }
     this.updateSelection();
+  }
+
+  // ---------------------------------------------------- 門的開關（漫遊時點門）
+  // 收集每扇門的門片；重建牆體後依目前開關狀態擺好
+  collectDoors() {
+    this.doors = new Map();
+    this.doorRoots = new Map(); // 門的整體（含門框），用來判斷點在門口範圍
+    this.structure.traverse((o) => {
+      const oid = o.userData.openingId;
+      if (oid && o.parent?.userData.openingId !== oid && !this.doorRoots.has(oid)) this.doorRoots.set(oid, o);
+      const d = o.userData.door;
+      if (!d) return;
+      const id = o.userData.openingId;
+      if (!this.doors.has(id)) this.doors.set(id, []);
+      this.doors.get(id).push({ obj: o, door: d, x0: o.position.x });
+    });
+    this.doorState = this.doorState || new Map();
+    for (const id of this.doors.keys()) this.poseDoor(id);
+  }
+
+  poseDoor(id) {
+    const st = this.doorState.get(id);
+    const p = st ? st.p : 0;
+    const e = p * p * (3 - 2 * p); // 緩入緩出
+    for (const { obj, door, x0 } of this.doors.get(id) || []) {
+      if (door.type === 'swing') obj.rotation.y = door.angle * e;
+      else obj.position.x = x0 + door.dx * e;
+    }
+  }
+
+  toggleDoor(id) {
+    if (!this.doors?.has(id)) return false;
+    const st = this.doorState.get(id) || { p: 0, target: 0 };
+    st.target = st.target ? 0 : 1;
+    this.doorState.set(id, st);
+    this.live.activity(true);
+    return true;
+  }
+
+  // 每個畫面推進開關門動畫；回傳是否仍在動
+  animateDoors(dt) {
+    if (!this.doorState) return false;
+    let moving = false;
+    for (const [id, st] of this.doorState) {
+      if (st.p === st.target) continue;
+      st.p = st.target > st.p ? Math.min(1, st.p + dt / 0.7) : Math.max(0, st.p - dt / 0.7);
+      this.poseDoor(id);
+      moving = true;
+      if (st.p === st.target) this.live.activity(true); // 動畫結束後實景重新計算
+    }
+    return moving;
+  }
+
+  // 找出畫面上該點、伸手可及（3.5 公尺內）的門
+  doorAt(e) {
+    if (!this.doors?.size) return null;
+    this.raycaster.setFromCamera(this._ndc(e), this.camera);
+    this.raycaster.far = 3.5;
+    const hit = this.raycaster.intersectObjects([this.structure, this.itemsGroup], true)[0];
+    const id = hit?.object.userData.openingId;
+    if (id && this.doors.has(id)) return id;
+    // 門已打開時點門口中間：檢查視線是否穿過門框範圍
+    const ray = this.raycaster.ray, p = new THREE.Vector3();
+    let best = null, bestD = hit ? hit.distance + 0.05 : 3.5;
+    for (const oid of this.doors.keys()) {
+      const root = this.doorRoots.get(oid);
+      if (!root) continue;
+      const box = new THREE.Box3().setFromObject(root);
+      if (!ray.intersectBox(box, p)) continue;
+      const d = p.distanceTo(ray.origin);
+      if (d < bestD) { bestD = d; best = oid; }
+    }
+    return best;
   }
 
   // 寫實材質：布料絨面、木作與烤漆清漆、石材與磁磚反光、凹凸紋理（手機省略凹凸以維持流暢）
@@ -375,6 +450,7 @@ export class View3D {
   // ---------------------------------------------------- 漫遊模式
   setMode(mode) {
     this.mode = mode;
+    this.canvas.style.cursor = '';
     if (mode === 'walk') {
       const P = store.project;
       // 從目前視角中心或第一個房間開始
@@ -509,6 +585,11 @@ export class View3D {
       }
     });
     c.addEventListener('pointermove', (e) => {
+      // 漫遊時滑鼠移到門上顯示手形游標
+      if (this.mode === 'walk' && !this.lookDrag && e.pointerType === 'mouse') {
+        const now = performance.now();
+        if (!this._hoverT || now - this._hoverT > 80) { this._hoverT = now; c.style.cursor = this.doorAt(e) ? 'pointer' : ''; }
+      }
       if (this.lookDrag) {
         if (this.walk.gyro && this.walk.gyroOffset !== null) {
           // 陀螺儀開啟時，拖曳只調整水平基準方向
@@ -536,6 +617,10 @@ export class View3D {
         if (this.drag3d.started) store.changed('commit');
         this.drag3d = null;
         this.controls.enabled = this.mode !== 'walk';
+      } else if (this.down && !moved && this.down.button === 0 && this.mode === 'walk') {
+        // 漫遊時點門：開門 / 關門
+        const id = this.doorAt(e);
+        if (id) this.toggleDoor(id);
       } else if (this.down && !moved && this.down.button === 0 && this.mode !== 'walk') {
         const hit = this.pick(e);
         if (!hit) store.select(null);

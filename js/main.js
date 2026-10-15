@@ -1291,7 +1291,7 @@ class App {
     $('#walkTouch').hidden = !walking || !touch;
     $('#gyroBtn').hidden = typeof DeviceOrientationEvent === 'undefined';
     $('#gyroBtn').classList.remove('on'); $('#gyroBtn').textContent = '◎ 陀螺儀';
-    if (touch) $('#walkHelp').textContent = '拖曳環顧 · 搖桿移動 · 再按「漫遊」離開';
+    if (touch) $('#walkHelp').textContent = '拖曳環顧 · 搖桿移動 · 點門開關 · 再按「漫遊」離開';
     if (walking) this.view3d.canvas.focus();
   }
 
