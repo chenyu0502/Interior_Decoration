@@ -196,14 +196,20 @@ export class View3D {
     this.doorState = this.doorState || new Map();
     for (const k of [...this.doors.keys()]) if (k.startsWith(`${itemId}#`)) this.doors.delete(k);
     let n = 0;
+    obj.updateMatrixWorld(true);
+    const inv = new THREE.Matrix4().copy(obj.matrixWorld).invert();
+    const list = [];
     obj.traverse((o) => {
       const d = o.userData.door;
       if (!d) return;
       const key = `${itemId}#${n++}`;
       o.userData.partKey = key;
-      this.doors.set(key, [{ obj: o, door: d, x0: o.position.x, z0: o.position.z }]);
-      this.poseDoor(key);
+      // 關閉時的中心（物件座標）：門已打開時點櫃內，也能找到原本位置的門片關上
+      const home = new THREE.Box3().setFromObject(o).getCenter(new THREE.Vector3()).applyMatrix4(inv);
+      this.doors.set(key, [{ obj: o, door: d, x0: o.position.x, z0: o.position.z, home, item: obj }]);
+      list.push(key);
     });
+    for (const key of list) this.poseDoor(key);
   }
 
   poseDoor(id) {
@@ -253,11 +259,12 @@ export class View3D {
     // 點到櫃體：開關離點擊位置最近的門片或抽屜（50 公分內）
     const itemId = hit?.object.userData.itemId;
     if (itemId) {
-      let near = null, nd = 0.5;
+      let near = null, nd = 0.6;
       const c = new THREE.Vector3();
       for (const [k, parts] of this.doors) {
         if (!k.startsWith(`${itemId}#`)) continue;
-        new THREE.Box3().setFromObject(parts[0].obj).getCenter(c);
+        const pt = parts[0];
+        c.copy(pt.home).applyMatrix4(pt.item.matrixWorld);
         const dd = c.distanceTo(hit.point);
         if (dd < nd) { nd = dd; near = k; }
       }
