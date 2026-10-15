@@ -47,6 +47,7 @@ class App {
   constructor() {
     this.plan = new Plan2D($('#planCanvas'), this);
     this.view3d = new View3D($('#view3d'), this);
+    this.setupLive();
     this.selectedStyle = null;
     this.catFilter = 'all';
     this.buildCatalogUI();
@@ -266,7 +267,7 @@ class App {
       // 3. 光線追蹤重拍
       try { await studio.initTracer(); } catch (e) { console.warn('縮圖光線追蹤無法使用', e); return; }
       const samples = this.isMobileLayout() ? 48 : 128;
-      const paused = () => !!this.studio?.running || !!this.view3d?.vr?.active;
+      const paused = () => !!this.studio?.running || !!this.view3d?.vr?.active || !!this.view3d?.live?.busy;
       let checked = false;
       for (const j of todo) {
         if (stale()) return;
@@ -943,6 +944,7 @@ class App {
         topView: () => this.view3d.topView(),
         walk: () => this.toggleWalk(),
         render: () => this.openRender(),
+        live: () => { const l = this.view3d.live; l.setEnabled(!l.enabled); toast(l.enabled ? '實景模式已開啟：停止操作約 1 秒後，畫面會逐漸算成照片' : '實景模式已關閉'); },
         vr: () => this.toggleVR(),
         night: () => { store.update((p) => { p.settings.night = !p.settings.night; }, 'settings'); this.syncToggles(); },
         ceiling: () => { store.update((p) => { p.settings.showCeiling = !p.settings.showCeiling; }, 'settings'); this.syncToggles(); },
@@ -954,6 +956,24 @@ class App {
   }
 
   isMode(m) { return $('#views').classList.contains(`mode-${m}`); }
+
+  // 實景模式：按鈕狀態與進度標籤
+  setupLive() {
+    const live = this.view3d.live;
+    const btn = $('#liveBtn'), badge = $('#liveBadge');
+    live.onStatus = (st) => {
+      btn.classList.toggle('on', st.enabled && !st.failed);
+      badge.classList.toggle('warn', st.failed);
+      let text = '';
+      if (st.failed && st.enabled) text = '此裝置無法使用實景模式';
+      else if (st.enabled && st.state === 'tracing') text = st.covering ? `實景計算中 ${Math.round(st.progress * 100)}%` : '實景準備中…';
+      else if (st.enabled && st.state === 'done') text = '實景照片';
+      badge.title = st.failed ? st.reason || '' : '';
+      if (badge.textContent !== text) badge.textContent = text;
+      badge.hidden = !text;
+    };
+    live.status();
+  }
 
   // ------------------------------------------------------------ 寫實渲染
   openRender() {

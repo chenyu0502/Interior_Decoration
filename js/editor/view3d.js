@@ -10,6 +10,7 @@ import { materialCanvas, getMaterial } from '../data/materials.js';
 import { paletteFor } from '../data/styles.js';
 import { enableGyro } from './pano-viewer.js';
 import { VRMode } from './vr.js';
+import { LiveTrace } from './live-trace.js';
 
 const S = 0.01; // 公分 → 公尺
 
@@ -78,9 +79,12 @@ export class View3D {
     this._bindEvents();
     new ResizeObserver(() => this.resize()).observe(container);
     this.resize();
-    store.on('change', (reason) => { this.needsSync = true; this._lastReason = reason; });
-    store.on('select', () => this.updateSelection());
+    store.on('change', (reason) => { this.needsSync = true; this._lastReason = reason; this.live.activity(true); });
+    store.on('select', () => { this.updateSelection(); this.live.activity(); });
     this.vr = new VRMode(this);
+    // 實景模式：停止操作後以光線追蹤把畫面算成照片
+    this.live = new LiveTrace(this, { mobile: window.matchMedia?.('(pointer: coarse)').matches });
+    this._camSig = '';
     this.clock = new THREE.Clock();
     this.renderer.setAnimationLoop(() => this.tick());
   }
@@ -93,6 +97,7 @@ export class View3D {
     this.canvas.style.height = `${r.height}px`;
     this.camera.aspect = r.width / r.height;
     this.camera.updateProjectionMatrix();
+    this.live?.activity();
   }
 
   get visible() { return this.container.offsetParent !== null && this.container.clientWidth > 2; }
@@ -100,6 +105,7 @@ export class View3D {
   tick() {
     // VR 進行中：不受頁面版面影響，持續以頭盔視角渲染
     if (this.vr.active) {
+      if (this.live.covering || this.live.busy) this.live.cancel();
       const dt = Math.min(0.05, this.clock.getDelta());
       if (this.needsSync) { this.needsSync = false; this.sync(); this.renderer.shadowMap.needsUpdate = true; }
       this.vr.update(dt);
@@ -108,11 +114,18 @@ export class View3D {
     }
     if (!this.visible) return;
     const dt = Math.min(0.05, this.clock.getDelta());
-    if (this.needsSync) { this.needsSync = false; this.sync(); }
+    let changed = false;
+    if (this.needsSync) { this.needsSync = false; this.sync(); changed = true; }
     if (this.mode === 'walk') this._walkStep(dt);
     else this.controls.update();
     if (this.selectionBox.visible && this.selectionBox.object) this.selectionBox.update();
-    this.renderer.render(this.scene, this.camera);
+    // 視角有變動就取消實景照片
+    this.camera.updateMatrixWorld();
+    const sig = this.camera.matrixWorld.elements.map((x) => x.toFixed(4)).join() + this.camera.projectionMatrix.elements[0].toFixed(4);
+    if (sig !== this._camSig) { this._camSig = sig; this.live.activity(); changed = true; }
+    // 照片蓋在畫面上且沒有變動時，不必重畫即時畫面
+    if (changed || !this.live.covering) this.renderer.render(this.scene, this.camera);
+    this.live.tick(!!this.app.studio?.running);
   }
 
   // ---------------------------------------------------- 場景同步
