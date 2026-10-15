@@ -17,7 +17,7 @@ const SURFACE = {
   brick: { rough: () => 0.9, clearcoat: 0, ccRough: 0.5, bump: 3.5 },
   slats: { rough: (r) => r, clearcoat: 0.15, ccRough: 0.3, bump: 3 },
   stripe: { rough: () => 0.9, clearcoat: 0, ccRough: 0.5, bump: 0.4 },
-  paint: { rough: () => 0.88, clearcoat: 0, ccRough: 0.5, bump: 0.5 },
+  paint: { rough: () => 0.88, clearcoat: 0, ccRough: 0.5, bump: 0 }, // 乳膠漆牆面平滑，不加凹凸（避免遠看產生顆粒）
   fabric: { rough: () => 1, clearcoat: 0, ccRough: 0.5, bump: 1.5, sheen: 1 },
   tatami: { rough: () => 0.85, clearcoat: 0, ccRough: 0.5, bump: 2 },
 };
@@ -89,7 +89,7 @@ export function makeLook({ lights = false, normalMaps = true, raster = false } =
       r.clearcoatRoughness = s.ccRough;
       if (s.sheen) { r.sheen = 1; r.sheenRoughness = 0.7; r.sheenColor = new THREE.Color(def.base).lerp(new THREE.Color('#ffffff'), 0.3); }
       if (normalMaps) {
-        const n = normalMapFrom(m.map, s.bump);
+        const n = s.bump > 0 ? normalMapFrom(m.map, s.bump) : null;
         if (n) { r.normalMap = n; r.normalScale = new THREE.Vector2(0.6, 0.6); made.push(n); }
       }
     } else if (kind) {
