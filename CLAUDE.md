@@ -28,6 +28,7 @@ Interior Studio：純前端靜態網頁的室內設計工具（2D 平面圖、�
 | `js/editor/plan2d.js` | 2D 平面圖編輯器 |
 | `js/editor/view3d.js` | 3D 檢視與漫遊（含陀螺儀、虛擬搖桿） |
 | `js/editor/render.js`、`render-look.js` | 寫實渲染（光線追蹤、相容模式）、物理材質與天空 |
+| `js/editor/live-trace.js` | 實景模式（停止操作後在 3D 畫面上以光線追蹤算成照片） |
 | `js/editor/pano-viewer.js` | 360° 環景檢視器與檢視網頁匯出 |
 | `js/editor/vr.js` | VR 頭盔模式（WebXR、控制器移動與瞬間移動） |
 | `js/data/catalog.js` | 家具與門窗（2D 符號、3D 程序化模型、可調參數） |
