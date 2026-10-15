@@ -60,10 +60,11 @@ class Kit {
   // 可動部件（門片）：之後加入的物件都放在以 (x, z) 為轉軸的群組內，呼叫回傳的函式結束
   pivot(x, z, door) {
     const pv = new THREE.Group();
-    pv.position.set(x, 0, z);
+    const y = door.y || 0; // 翻轉門（烤箱）的轉軸高度
+    pv.position.set(x, y, z);
     pv.userData.door = door;
     const inner = new THREE.Group();
-    inner.position.set(-x, 0, -z);
+    inner.position.set(-x, -y, -z);
     pv.add(inner);
     this.g.add(pv);
     const prev = this.g;
@@ -113,6 +114,47 @@ class Kit {
 }
 
 function softR(pal, base = 1) { return (pal.soft || 2) * base; }
+
+// ---------------------------------------------------------------- 可開關的門片與抽屜
+// 中空櫃體：側板、頂板、底板、背板與層板（門打開後看得到內部）
+// x、z 為中心，y 為底面；前緣在 z + d / 2
+function carcass(k, w, h, d, x, y, z, m, { shelves = 1, t = 1.8, inner = m } = {}) {
+  k.box(t, h, d, x - w / 2 + t / 2, y, z, m);
+  k.box(t, h, d, x + w / 2 - t / 2, y, z, m);
+  k.box(w, t, d, x, y, z, m);
+  k.box(w, t, d, x, y + h - t, z, m);
+  k.box(w - 2 * t, h - 2 * t, t, x, y + t, z - d / 2 + t / 2, inner);
+  for (let i = 1; i <= shelves; i++) k.box(w - 2 * t, t, d - t - 1, x, y + (h * i) / (shelves + 1) - t / 2, z + 0.5, inner);
+}
+
+// 一排鉸鏈門：n 扇兩兩對開，鉸鏈在外側；front 為門片外側的 z
+// each(i, x, cw) 在門片群組內加上把手、玻璃等（隨門片一起轉動）
+function hingedDoors(k, n, x0, w, y, h, front, m, { t = 1.8, r = 0, angle = 92, each = null } = {}) {
+  const cw = w / n;
+  for (let i = 0; i < n; i++) {
+    const hingeLeft = n === 1 ? !k.opts.hingeRight : i % 2 === 0;
+    const xl = x0 + cw * i, xc = xl + cw / 2;
+    const a = THREE.MathUtils.degToRad(angle) * (hingeLeft ? -1 : 1);
+    const done = k.pivot(hingeLeft ? xl + 0.2 : xl + cw - 0.2, front - t / 2, { type: 'swing', angle: a });
+    if (m) k.box(cw - 0.5, h, t, xc, y, front - t / 2, m, r);
+    each?.(i, xc, cw, hingeLeft);
+    done();
+  }
+}
+
+// 抽屜：面板加上抽屜盒，往前拉出 pull 公分（dir = -1 時往 -z 拉出）
+function drawerBox(k, x, y, w, h, d, front, m, { pull = d * 0.65, dir = 1, tray = null, each = null } = {}) {
+  const done = k.pivot(0, 0, { type: 'slide', dz: pull * dir });
+  k.box(w, h, 1.8, x, y, front - dir * 0.9, m, 0.3);
+  const tm = tray || m, bd = d - 3, zc = front - dir * (1.8 + bd / 2);
+  const th = Math.max(4, h - 4);
+  k.box(w - 4, 1, bd, x, y + 1.5, zc, tm);
+  k.box(1, th, bd, x - w / 2 + 2.5, y + 1.5, zc, tm);
+  k.box(1, th, bd, x + w / 2 - 2.5, y + 1.5, zc, tm);
+  k.box(w - 4, th, 1, x, y + 1.5, zc - dir * bd / 2, tm);
+  each?.();
+  done();
+}
 
 // 抽象畫貼圖
 function artTexture(seed, pal) {
@@ -383,32 +425,77 @@ function buildCabinet(k, w, d, h, { doors = 0, drawers = 0, legH = null, body = 
     }
     return;
   }
-  k.box(w, bh, d, 0, lh, 0, bodyMat, r);
-  const fz = d / 2 + 0.3;
-  const lineMat = mat('#000000', 'matte', { transparent: true, opacity: 0.25 });
-  if (glass) {
-    const n = Math.max(1, Math.round(w / 50));
-    for (let i = 0; i < n; i++) {
-      const cw = w / n, x = -w / 2 + cw * (i + 0.5);
-      k.box(cw - 4, bh - 6, 0.6, x, lh + 3, fz, mat('#cfdde4', 'glass'));
-      k.box(cw - 2, 1.4, 1.2, x, lh + 2, fz, k.metalMat());
-      k.box(cw - 2, 1.4, 1.2, x, h - 3.4, fz, k.metalMat());
+  const fz = d / 2;
+  const handles = !(p.legs === 'metal' && !k.opts.forceHandles); // 現代風：無把手（按壓開啟）
+  if (glass || doors) {
+    // 有門的櫃子：中空櫃體 + 可開的門片
+    const cd = d - 1.8, cz = -0.9;
+    const tall = bh > 150;
+    carcass(k, w, bh, cd, 0, lh, cz, bodyMat, { shelves: tall ? (d >= 50 ? 1 : Math.max(2, Math.round(bh / 45) - 1)) : 1 });
+    if (tall && d >= 50) {
+      // 衣櫃：上層層板下方掛衣桿與衣物
+      const rodY = lh + bh / 2 - 8;
+      const rod = k.cyl(1, 1, w - 4, 0, 0, cz, k.metalMat(), 10);
+      rod.rotation.z = Math.PI / 2; rod.position.y = rodY;
+      const rnd = mulberry32(hashStr(`wr${w}${h}`));
+      const cols = [p.fabric, p.fabric2, '#e9e4dc', '#3d4552', '#9b8a74', '#c9cdd2'];
+      for (let x = -w / 2 + 8; x < w / 2 - 8; x += 7 + rnd() * 5) {
+        const ch = 55 + rnd() * 45;
+        k.box(1.6, ch, cd * 0.7, x, rodY - ch - 1, cz, mat(cols[Math.floor(rnd() * cols.length)], 'fabric'));
+      }
     }
-    k.box(w - 8, 0.5, 0.5, 0, h - 5, fz - 2, mat('#fff4d6', 'emissive'));
-  }
-  if (doors) {
-    const cw = w / doors;
-    for (let i = 1; i < doors; i++) k.box(0.4, bh - 2, 0.6, -w / 2 + cw * i, lh + 1, fz, lineMat);
-    for (let i = 0; i < doors; i++) {
-      const x = -w / 2 + cw * (i + 0.5) + (i % 2 ? -cw * 0.38 : cw * 0.38);
-      if (p.legs === 'metal' && !k.opts.forceHandles) continue; // 現代風：無把手
-      k.handle(x, lh + bh * 0.45, fz + 0.6, Math.min(16, bh * 0.25));
+    if (glass) {
+      const n = Math.max(1, Math.round(w / 50));
+      hingedDoors(k, n, -w / 2, w, lh, bh, fz, null, {
+        each: (i, x, cw, hingeLeft) => {
+          k.box(cw - 4, bh - 6, 0.6, x, lh + 3, fz - 0.9, mat('#cfdde4', 'glass'));
+          k.box(cw - 0.6, 2, 1.8, x, lh, fz - 0.9, k.metalMat());
+          k.box(cw - 0.6, 2, 1.8, x, lh + bh - 2, fz - 0.9, k.metalMat());
+          k.box(2, bh, 1.8, x - cw / 2 + 1.2, lh, fz - 0.9, k.metalMat());
+          k.box(2, bh, 1.8, x + cw / 2 - 1.2, lh, fz - 0.9, k.metalMat());
+          if (handles) k.handle(x + (hingeLeft ? cw * 0.38 : -cw * 0.38), lh + bh * 0.45, fz + 0.4, Math.min(16, bh * 0.2));
+        },
+      });
+      k.box(w - 8, 0.5, 0.5, 0, h - 5, fz - 4, mat('#fff4d6', 'emissive'));
+    } else {
+      hingedDoors(k, doors, -w / 2, w, lh, bh, fz, bodyMat, {
+        r: Math.min(r, 1),
+        each: (i, x, cw, hingeLeft) => { if (handles) k.handle(x + (hingeLeft ? cw * 0.38 : -cw * 0.38), lh + bh * 0.45, fz + 0.4, Math.min(16, bh * 0.25)); },
+      });
     }
+    return;
   }
   if (drawers) {
+    // 抽屜櫃：櫃體 + 可拉出的抽屜
+    k.box(w, bh, d - 1.8, 0, lh, -0.9, bodyMat, r);
     const dh = bh / drawers;
-    for (let i = 1; i < drawers; i++) k.box(w - 2, 0.4, 0.6, 0, lh + dh * i, fz, lineMat);
-    for (let i = 0; i < drawers; i++) k.handle(0, lh + dh * (i + 0.5), fz + 0.6, Math.min(18, w * 0.3), false);
+    for (let i = 0; i < drawers; i++) {
+      drawerBox(k, 0, lh + dh * i + 0.4, w - 1, dh - 0.8, d - 2, fz, bodyMat, {
+        each: () => k.handle(0, lh + dh * (i + 0.5), fz + 0.4, Math.min(18, w * 0.3), false),
+      });
+    }
+    return;
+  }
+  k.box(w, bh, d, 0, lh, 0, bodyMat, r);
+}
+
+// 冰箱：上冷凍、下冷藏兩扇門（右側鉸鏈），內部白色並有層板
+function buildFridge(k, w, d, h) {
+  const m = mat(k.pal.legs === 'metal' ? '#3a3b3d' : '#d9dcdf', 'metal', { metalness: 0.6, roughness: 0.3 });
+  const inner = mat('#f4f6f7', 'gloss');
+  const t = 4, cd = d - t, cz = -t / 2, split = h * 0.62;
+  k.box(w, h, cd, 0, 0, cz, m, 2);
+  // 內部（比外殼小一圈，打開後可見）
+  k.box(w - 5, split - 6, 0.5, 0, 3, cz + cd / 2 - 0.1, inner);
+  k.box(w - 5, h - split - 6, 0.5, 0, split + 3, cz + cd / 2 - 0.1, inner);
+  for (const y of [split * 0.35, split * 0.68]) k.box(w - 6, 0.6, 2, 0, y, cz + cd / 2 - 1, mat('#dfe9ee', 'glass'));
+  const chrome = mat('#bbb', 'chrome');
+  for (const [y0, hh] of [[0, split - 0.3], [split + 0.3, h - split - 0.3]]) {
+    const done = k.pivot(w / 2 - 0.5, d / 2 - t / 2, { type: 'swing', angle: THREE.MathUtils.degToRad(100) });
+    k.box(w, hh, t, 0, y0, d / 2 - t / 2, m, 1.5);
+    k.box(w - 8, 0.4, 0.6, 0, y0 + hh - 3, d / 2 - t - 0.2, inner); // 門內側
+    k.box(1.5, 40, 2, -w / 2 + 6, y0 === 0 ? split - 44 : split + 4, d / 2 + 1, chrome);
+    done();
   }
 }
 
@@ -586,8 +673,10 @@ function buildIsland(k, w, d, h, prm = {}) {
   k.box(rw, bh, db, xs + rw / 2, kick, zc, body);
   const nd = 3, dh = bh / nd;
   for (let i = 0; i < nd; i++) {
-    k.box(rw - 3, dh - 1.5, 1.8, xs + rw / 2, kick + i * dh + 0.75, zb - 0.6, body, 0.3);
-    k.handle(xs + rw / 2, kick + i * dh + dh - 8, zb - 2, Math.min(40, rw * 0.4), false);
+    // 工作側（-z）的抽屜，往 -z 拉出
+    drawerBox(k, xs + rw / 2, kick + i * dh + 0.75, rw - 3, dh - 1.5, Math.min(55, db - 4), zb + 1.2, body, {
+      dir: -1, each: () => k.handle(xs + rw / 2, kick + i * dh + dh - 8, zb - 0.8, Math.min(40, rw * 0.4), false),
+    });
   }
   // 電器櫃：側板、隔板、層板、吧台側背板
   k.box(t, bh, db, x0 + t / 2, kick, zc, body);
@@ -613,11 +702,17 @@ function buildIsland(k, w, d, h, prm = {}) {
     k.box(ww, ah, ad, cx, y, cz, kind === 'coffee' ? dark : steel, 1);
     const zf = cz - ad / 2 - 0.4;
     if (kind === 'oven') {
+      // 烤箱門：下緣為轉軸往下翻開
+      const done = k.pivot(cx, zf, { type: 'flip', angle: -THREE.MathUtils.degToRad(80), y: y + 3 });
       k.box(ww - 6, ah * 0.62, 0.8, cx, y + 4, zf, glassM);
-      k.box(ww - 6, ah * 0.2, 0.8, cx, y + ah * 0.74, zf, dark);
       k.box(ww * 0.6, 1.4, 2, cx, y + ah * 0.68, zf - 1.5, steel);
+      done();
+      k.box(ww - 6, ah * 0.2, 0.8, cx, y + ah * 0.74, zf, dark);
     } else if (kind === 'micro') {
+      // 微波爐門：左側為轉軸
+      const done = k.pivot(cx - ww * 0.12 - ww * 0.34, zf, { type: 'swing', angle: THREE.MathUtils.degToRad(95) });
       k.box(ww * 0.68, ah - 6, 0.8, cx - ww * 0.12, y + 3, zf, glassM);
+      done();
       k.box(ww * 0.18, ah - 6, 0.8, cx + ww * 0.36, y + 3, zf, dark);
     } else {
       k.box(ww * 0.5, ah * 0.25, 0.8, cx, y + ah * 0.55, zf, steel);
@@ -826,10 +921,12 @@ export const CATALOG = [
       k.opts.forceHandles = p.legs !== 'metal';
       const doors = Math.max(1, Math.round(w / 60));
       const body = mat(p.legs === 'plinth' ? p.stone : p.lacquer, 'matte');
-      k.box(w, h - 14, d - 4, 0, 10, -2, body, 0.3);
-      const cw = w / doors;
-      for (let i = 1; i < doors; i++) k.box(0.4, h - 16, 0.4, -w / 2 + cw * i, 11, d / 2 - 3.8, mat('#000000', 'matte', { transparent: true, opacity: 0.3 }));
-      if (p.legs !== 'metal') for (let i = 0; i < doors; i++) k.handle(-w / 2 + cw * (i + 0.5), h - 16, d / 2 - 3, 16, false);
+      // 中空下櫃 + 可開的門片（把手隨門片轉動）
+      carcass(k, w, h - 14, d - 3.8, 0, 10, -1.9, body);
+      hingedDoors(k, doors, -w / 2, w, 10.5, h - 15, d / 2 - 2, body, {
+        r: 0.3,
+        each: (i, x) => { if (p.legs !== 'metal') k.handle(x, h - 16, d / 2 - 1.6, 16, false); },
+      });
       const top = mat(p.stone, 'stone');
       k.box(w, 4, d, 0, h - 4, 0, top);
       // 水槽
@@ -843,9 +940,9 @@ export const CATALOG = [
       }
     },
   },
-  { id: 'kitchen_base', name: '廚房下櫃', cat: 'kitchen', w: 90, d: 62, h: 88, roles: ['lacquer', 'stone'], plan: planCabinet, build: (k, w, d, h) => { k.box(w - 4, 10, d - 8, 0, 0, -2, mat('#333', 'matte')); k.box(w, h - 14, d - 4, 0, 10, -2, mat(k.pal.lacquer, 'matte')); k.box(w, 4, d, 0, h - 4, 0, mat(k.pal.stone, 'stone')); k.handle(0, h - 16, d / 2 - 3, 16, false); } },
+  { id: 'kitchen_base', name: '廚房下櫃', cat: 'kitchen', w: 90, d: 62, h: 88, roles: ['lacquer', 'stone'], plan: planCabinet, build: (k, w, d, h) => { k.box(w - 4, 10, d - 8, 0, 0, -2, mat('#333', 'matte')); const body = mat(k.pal.lacquer, 'matte'); carcass(k, w, h - 14, d - 3.8, 0, 10, -1.9, body); hingedDoors(k, 1, -w / 2, w, 10.5, h - 15, d / 2 - 2, body, { r: 0.3, each: (i, x) => k.handle(x, h - 16, d / 2 - 1.6, 16, false) }); k.box(w, 4, d, 0, h - 4, 0, mat(k.pal.stone, 'stone')); } },
   { id: 'wall_cabinet', name: '廚房吊櫃', cat: 'kitchen', w: 180, d: 35, h: 70, elev: 150, roles: ['lacquer', 'wood2'], plan: (ctx, w, d, lw) => { ctx.setLineDash([6, 4]); P.rect(ctx, w, d, lw, 'rgba(255,255,255,0.4)', 1); ctx.setLineDash([]); P.line(ctx, -w / 2, -d / 2, w / 2, d / 2, lw); }, build: (k, w, d, h) => buildCabinet(k, w, d, h, { doors: Math.max(1, Math.round(w / 45)), legH: 0 }) },
-  { id: 'fridge', name: '冰箱', cat: 'kitchen', w: 75, d: 72, h: 180, roles: ['metal'], plan: (ctx, w, d, lw) => { P.rect(ctx, w, d, lw, '#eef1f3', 2); P.label(ctx, '冰箱', w, d); }, build: (k, w, d, h) => { const m = mat(k.pal.legs === 'metal' ? '#3a3b3d' : '#d9dcdf', 'metal', { metalness: 0.6, roughness: 0.3 }); k.box(w, h, d, 0, 0, 0, m, 2); k.box(w - 1, 0.6, 1, 0, h * 0.62, d / 2, mat('#222', 'matte')); k.box(1.5, 40, 2, -w / 2 + 6, h * 0.66, d / 2 + 1, mat('#bbb', 'chrome')); k.box(1.5, 40, 2, -w / 2 + 6, h * 0.62 - 44, d / 2 + 1, mat('#bbb', 'chrome')); } },
+  { id: 'fridge', name: '冰箱', cat: 'kitchen', w: 75, d: 72, h: 180, roles: ['metal'], plan: (ctx, w, d, lw) => { P.rect(ctx, w, d, lw, '#eef1f3', 2); P.label(ctx, '冰箱', w, d); }, build: (k, w, d, h) => buildFridge(k, w, d, h) },
   {
     id: 'kitchen_island', name: '中島', cat: 'kitchen', w: 180, d: 90, h: 90, roles: ['lacquer', 'stone'],
     params: [
@@ -855,7 +952,7 @@ export const CATALOG = [
     ],
     plan: planIsland, build: buildIsland,
   },
-  { id: 'washer', name: '洗衣機', cat: 'kitchen', w: 60, d: 62, h: 85, roles: [], plan: (ctx, w, d, lw) => { P.rect(ctx, w, d, lw, '#f5f5f5', 2); P.circle(ctx, 0, 6, Math.min(w, d) * 0.3, lw, '#e0e6ea'); }, build: (k, w, d, h) => { k.box(w, h, d, 0, 0, 0, mat('#f3f3f3', 'gloss'), 2); const door = new THREE.Mesh(new THREE.TorusGeometry(16, 2.5, 10, 32), mat('#bfc5c9', 'chrome')); door.position.set(0, h * 0.45, d / 2 + 1); k.add(door); const g = new THREE.Mesh(new THREE.CircleGeometry(15, 32), mat('#4a5a66', 'gloss')); g.position.set(0, h * 0.45, d / 2 + 0.6); k.add(g); } },
+  { id: 'washer', name: '洗衣機', cat: 'kitchen', w: 60, d: 62, h: 85, roles: [], plan: (ctx, w, d, lw) => { P.rect(ctx, w, d, lw, '#f5f5f5', 2); P.circle(ctx, 0, 6, Math.min(w, d) * 0.3, lw, '#e0e6ea'); }, build: (k, w, d, h) => { k.box(w, h, d, 0, 0, 0, mat('#f3f3f3', 'gloss'), 2); const drum = k.cyl(14, 14, 1, 0, 0, 0, mat('#2a2f33', 'matte'), 32); drum.rotation.x = Math.PI / 2; drum.position.set(0, h * 0.45, d / 2 + 0.1); const done = k.pivot(-18.5, d / 2 + 1, { type: 'swing', angle: -THREE.MathUtils.degToRad(100) }); const door = new THREE.Mesh(new THREE.TorusGeometry(16, 2.5, 10, 32), mat('#bfc5c9', 'chrome')); door.position.set(0, h * 0.45, d / 2 + 1); k.add(door); const g = new THREE.Mesh(new THREE.CircleGeometry(15, 32), mat('#4a5a66', 'glass', { opacity: 0.6 })); g.position.set(0, h * 0.45, d / 2 + 0.6); k.add(g); k.box(3, 6, 2, 15, h * 0.45 - 3, d / 2 + 2, mat('#9aa1a6', 'chrome')); done(); } },
   // ---- 衛浴
   { id: 'toilet', name: '馬桶', cat: 'bath', w: 40, d: 70, h: 78, roles: ['ceramic'], plan: (ctx, w, d, lw) => { rr(ctx, -w / 2, -d / 2, w, 18, 3); fillStroke(ctx, '#fff', lw); ctx.beginPath(); ctx.ellipse(0, 8, w / 2 - 2, d / 2 - 12, 0, 0, Math.PI * 2); fillStroke(ctx, '#fff', lw); }, build: (k, w, d, h) => { const c = mat(k.pal.ceramic, 'ceramic'); k.box(w, h - 30, 18, 0, 30, -d / 2 + 9, c, 3); const b = k.cyl(w / 2 - 1, w / 2 - 6, 40, 0, 0, 6, c, 32); b.scale.z = 1.35; const s = k.cyl(w / 2, w / 2, 3, 0, 40, 6, c, 32); s.scale.z = 1.3; } },
   { id: 'vanity', name: '浴櫃洗手台', cat: 'bath', w: 80, d: 50, h: 85, roles: ['wood', 'stone'], plan: (ctx, w, d, lw, pal) => { P.rect(ctx, w, d, lw, tint(pal.wood, 0.3), 1); ctx.beginPath(); ctx.ellipse(0, 2, w * 0.3, d * 0.3, 0, 0, Math.PI * 2); fillStroke(ctx, '#fff', lw); }, build: (k, w, d, h) => { const p = k.pal; k.box(w, h - 30, d - 2, 0, 20, -1, k.woodMat(), 0.5); k.box(w, 3, d, 0, h - 3, 0, mat(p.stone, 'stone')); const b = k.cyl(w * 0.22, w * 0.18, 12, 0, h, 2, mat(p.ceramic, 'ceramic'), 32); b.scale.z = 0.8; k.cyl(1, 1, 22, 0, h, -d / 2 + 6, mat(p.legs === 'gold' || p.legs === 'plinth' ? '#b8954f' : '#cfcfcf', p.legs === 'gold' || p.legs === 'plinth' ? 'gold' : 'chrome'), 10); k.box(2, 2, 12, 0, h + 20, -d / 2 + 11, mat(p.legs === 'gold' || p.legs === 'plinth' ? '#b8954f' : '#cfcfcf', p.legs === 'gold' || p.legs === 'plinth' ? 'gold' : 'chrome')); } },
@@ -1045,11 +1142,21 @@ export function buildOpeningObject(op, wallT, pal) {
   k.box(fw, h, t, -w / 2 + fw / 2, 0, 0, frameMat); k.box(fw, h, t, w / 2 - fw / 2, 0, 0, frameMat);
   const panes = def.type === 'french' ? Math.max(2, Math.round(w / 70)) : def.type === 'fixed' ? 1 : Math.max(2, Math.round(w / 80));
   const pw = (w - fw * 2) / panes;
+  const sliding = def.type !== 'fixed';
   for (let i = 0; i < panes; i++) {
     const x = -w / 2 + fw + pw * (i + 0.5);
-    const z = def.type === 'window' ? (i % 2 ? 1.5 : -1.5) : 0;
-    k.box(pw + (def.type === 'window' ? 3 : 0), h - fw * 2, 0.6, x, fw, z, glass);
-    if (i > 0) k.box(3, h - fw * 2, 4, -w / 2 + fw + pw * i, fw, 0, frameMat);
+    if (!sliding) {
+      k.box(pw, h - fw * 2, 0.6, x, fw, 0, glass);
+      if (i > 0) k.box(3, h - fw * 2, 4, -w / 2 + fw + pw * i, fw, 0, frameMat);
+      continue;
+    }
+    // 推拉窗：前後兩道軌，單數扇往左滑到相鄰那扇前方；每扇有自己的窗框
+    const z = i % 2 ? 1.5 : -1.5, sw = pw + 3, sh = h - fw * 2, b = 2.5;
+    const done = i % 2 ? k.pivot(0, 0, { type: 'slide', dx: -(pw - 4) }) : null;
+    k.box(sw - b * 2, sh - b * 2, 0.6, x, fw + b, z, glass);
+    k.box(b, sh, 2, x - sw / 2 + b / 2, fw, z, frameMat); k.box(b, sh, 2, x + sw / 2 - b / 2, fw, z, frameMat);
+    k.box(sw, b, 2, x, fw, z, frameMat); k.box(sw, b, 2, x, fw + sh - b, z, frameMat);
+    done?.();
   }
   if (op.sill > 30) k.box(w + 10, 2.5, 6, 0, -2.5, t / 2 + 2, mat(pal.stone, 'stone'));
   return k.g;
