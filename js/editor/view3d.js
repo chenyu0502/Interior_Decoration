@@ -11,6 +11,7 @@ import { paletteFor } from '../data/styles.js';
 import { enableGyro } from './pano-viewer.js';
 import { VRMode } from './vr.js';
 import { LiveTrace } from './live-trace.js';
+import { makeLook, makeSky } from './render-look.js';
 
 const S = 0.01; // 公分 → 公尺
 
@@ -22,14 +23,20 @@ export class View3D {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.05;
+    // 與寫實渲染相同的色調（PBR Neutral），即時畫面與實景照片色彩一致
+    this.renderer.toneMapping = THREE.NeutralToneMapping;
+    this.renderer.toneMappingExposure = 1.0;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     container.appendChild(this.renderer.domElement);
     this.canvas = this.renderer.domElement;
 
+    this.mobile = !!window.matchMedia?.('(pointer: coarse)').matches;
+    this.looks = {};
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color('#e9edf1');
+    // 背景天空：從窗戶看出去是天空而不是單色
+    this.skyDay = makeSky({ zenith: '#8db6e6', horizon: '#e8eef3', ground: '#cfc9bd', env: 1, width: 512 });
+    this.skyNight = makeSky({ zenith: '#05080f', horizon: '#121829', ground: '#14161b', env: 1, width: 256 });
+    this.scene.background = this.skyDay;
     const pmrem = new THREE.PMREMGenerator(this.renderer);
     this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
     this.scene.environmentIntensity = 0.55;
@@ -83,7 +90,7 @@ export class View3D {
     store.on('select', () => { this.updateSelection(); this.live.activity(); });
     this.vr = new VRMode(this);
     // 實景模式：停止操作後以光線追蹤把畫面算成照片
-    this.live = new LiveTrace(this, { mobile: window.matchMedia?.('(pointer: coarse)').matches });
+    this.live = new LiveTrace(this, { mobile: this.mobile });
     this._camSig = '';
     this.clock = new THREE.Clock();
     this.renderer.setAnimationLoop(() => this.tick());
@@ -151,11 +158,26 @@ export class View3D {
     if (sKey !== this.structKey) {
       this.structKey = sKey;
       this.buildStructure(pal);
+      this.applyLook(this.structure);
     }
     this.syncItems(pal, palKey);
     this.applyLighting();
+    // 日夜切換時燈罩發光程度不同，重新套用寫實材質
+    const night = !!P.settings.night;
+    if (night !== this._lookNight) { this._lookNight = night; this.applyLook(this.structure); this.applyLook(this.itemsGroup); }
     if (this.firstBuild && (P.walls.length || P.items.length)) { this.firstBuild = false; this.resetView(); }
     this.updateSelection();
+  }
+
+  // 寫實材質：布料絨面、木作與烤漆清漆、石材與磁磚反光、凹凸紋理（手機省略凹凸以維持流暢）
+  applyLook(root) {
+    const night = !!store.project.settings.night;
+    const key = night ? 'night' : 'day';
+    const conv = this.looks[key] || (this.looks[key] = makeLook({ lights: night, normalMaps: !this.mobile, raster: true }));
+    root.traverse((o) => {
+      if (!o.isMesh) return;
+      o.material = Array.isArray(o.material) ? o.material.map(conv) : conv(o.material);
+    });
   }
 
   clearGroup(g) {
@@ -268,6 +290,7 @@ export class View3D {
         obj.add(inner);
         obj.userData = { itemId: it.id };
         inner.traverse((o) => { o.userData.itemId = it.id; });
+        this.applyLook(obj);
         this.itemsGroup.add(obj);
         entry = { key, obj };
         this.itemCache.set(it.id, entry);
@@ -290,7 +313,7 @@ export class View3D {
     this.hemi.intensity = night ? 0.12 : 1.1;
     this.sun.intensity = night ? 0 : 2.2;
     this.scene.environmentIntensity = night ? 0.12 : 0.55;
-    this.scene.background.set(night ? '#1b2030' : '#e9edf1');
+    this.scene.background = night ? this.skyNight : this.skyDay;
     this.ground.material.color.set(night ? '#30343d' : '#dfe3e6');
     // 燈具光源（夜間模式啟用）
     this.clearGroup(this.lightsGroup);

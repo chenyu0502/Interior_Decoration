@@ -965,7 +965,7 @@ class App {
       btn.classList.toggle('on', st.enabled && !st.failed);
       badge.classList.toggle('warn', st.failed);
       let text = '';
-      if (st.failed && st.enabled) text = '此裝置無法使用實景模式';
+      if (st.failed && st.enabled) text = `此裝置無法使用實景模式：${st.reason || '原因不明'}`;
       else if (st.enabled && st.state === 'tracing') text = st.covering ? `實景計算中 ${Math.round(st.progress * 100)}%` : '實景準備中…';
       else if (st.enabled && st.state === 'done') text = '實景照片';
       badge.title = st.failed ? st.reason || '' : '';

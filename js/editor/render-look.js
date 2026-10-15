@@ -17,7 +17,7 @@ const SURFACE = {
   brick: { rough: () => 0.9, clearcoat: 0, ccRough: 0.5, bump: 3.5 },
   slats: { rough: (r) => r, clearcoat: 0.15, ccRough: 0.3, bump: 3 },
   stripe: { rough: () => 0.9, clearcoat: 0, ccRough: 0.5, bump: 0.4 },
-  paint: { rough: () => 0.88, clearcoat: 0, ccRough: 0.5, bump: 0.5 },
+  paint: { rough: () => 0.88, clearcoat: 0, ccRough: 0.5, bump: 0 }, // 乳膠漆牆面平滑，不加凹凸（避免遠看產生顆粒）
   fabric: { rough: () => 1, clearcoat: 0, ccRough: 0.5, bump: 1.5, sheen: 1 },
   tatami: { rough: () => 0.85, clearcoat: 0, ccRough: 0.5, bump: 2 },
 };
@@ -66,13 +66,17 @@ function physical(src) {
   return p;
 }
 
-// 將場景材質換成寫實版本（複製後替換，不影響編輯畫面）
-export function realisticMaterials(root, { lights = false, normalMaps = true, raster = false } = {}) {
-  const map = new Map();
-  const made = [];
-  const convert = (m) => {
+// 寫實材質 → 原始材質（3D 檢視已換成寫實材質時，寫實渲染從原始材質重新轉換）
+const ORIGIN = new WeakMap();
+const originOf = (m) => (m && ORIGIN.get(m)) || m;
+
+// 建立材質轉換器：同一個來源材質只轉換一次（轉換器保留結果，可重複使用）
+export function makeLook({ lights = false, normalMaps = true, raster = false } = {}, made = []) {
+  const map = new WeakMap(); // 來源材質不再使用時自動釋放
+  return (m) => {
+    m = originOf(m);
     if (!m || !m.isMeshStandardMaterial) return m;
-    if (map.has(m.uuid)) return map.get(m.uuid);
+    if (map.has(m)) return map.get(m);
     let r = m;
     const kind = m.userData?.kind;
     if (m.userData?.matId) {
@@ -85,7 +89,7 @@ export function realisticMaterials(root, { lights = false, normalMaps = true, ra
       r.clearcoatRoughness = s.ccRough;
       if (s.sheen) { r.sheen = 1; r.sheenRoughness = 0.7; r.sheenColor = new THREE.Color(def.base).lerp(new THREE.Color('#ffffff'), 0.3); }
       if (normalMaps) {
-        const n = normalMapFrom(m.map, s.bump);
+        const n = s.bump > 0 ? normalMapFrom(m.map, s.bump) : null;
         if (n) { r.normalMap = n; r.normalScale = new THREE.Vector2(0.6, 0.6); made.push(n); }
       }
     } else if (kind) {
@@ -115,13 +119,20 @@ export function realisticMaterials(root, { lights = false, normalMaps = true, ra
         default: break;
       }
     }
-    if (r !== m) made.push(r);
-    map.set(m.uuid, r);
+    if (r !== m) { made.push(r); ORIGIN.set(r, m); }
+    map.set(m, r);
     return r;
   };
+}
+
+// 將場景材質換成寫實版本（複製後替換，不影響編輯畫面）
+export function realisticMaterials(root, opts = {}) {
+  const made = [];
+  const convert = makeLook(opts, made);
   root.traverse((o) => {
     if (!o.isMesh) return;
-    o.material = Array.isArray(o.material) ? o.material.map(convert) : convert(o.material);
+    // 3D 檢視已換成寫實材質的物件，從原始材質重新轉換
+    o.material = Array.isArray(o.material) ? o.material.map((m) => convert(originOf(m))) : convert(originOf(o.material));
   });
   return made;
 }
