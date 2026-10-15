@@ -57,6 +57,19 @@ class Kit {
   woodMat(color) { return mat(color || this.pal.wood, 'wood'); }
   metalMat(color) { const c = color || this.pal.metal; return mat(c, this.pal.legs === 'gold' ? 'gold' : 'metal'); }
   add(mesh) { mesh.castShadow = true; mesh.receiveShadow = true; this.g.add(mesh); return mesh; }
+  // 可動部件（門片）：之後加入的物件都放在以 (x, z) 為轉軸的群組內，呼叫回傳的函式結束
+  pivot(x, z, door) {
+    const pv = new THREE.Group();
+    pv.position.set(x, 0, z);
+    pv.userData.door = door;
+    const inner = new THREE.Group();
+    inner.position.set(-x, 0, -z);
+    pv.add(inner);
+    this.g.add(pv);
+    const prev = this.g;
+    this.g = inner;
+    return () => { this.g = prev; };
+  }
   // y 為底面高度
   box(w, h, d, x, y, z, m, r = 0) {
     w = Math.max(w, 0.1); h = Math.max(h, 0.1); d = Math.max(d, 0.1);
@@ -989,6 +1002,10 @@ export function buildOpeningObject(op, wallT, pal) {
     const zLeaf = (op.flipV ? -1 : 1) * (t / 2 - 3);
     for (let i = 0; i < leaves; i++) {
       const x = -w / 2 + 2 + lw * (i + 0.5);
+      // 門片繞鉸鏈開向門片所在的一側（與平面圖的開門弧線一致）
+      const hingeLeft = leaves === 2 ? i === 0 : !op.flipH;
+      const swing = (zLeaf >= 0 ? 1 : -1) * (hingeLeft ? -1 : 1) * THREE.MathUtils.degToRad(88);
+      const done = k.pivot(hingeLeft ? x - lw / 2 : x + lw / 2, zLeaf, { type: 'swing', angle: swing });
       if (leafLook.finish === 'glass') {
         // 玻璃門：四周細框加玻璃
         const st = 4.5, lh = h - 3;
@@ -1004,6 +1021,7 @@ export function buildOpeningObject(op, wallT, pal) {
       const hm = mat(pal.legs === 'gold' ? pal.metal : '#9a9a9a', pal.legs === 'gold' ? 'gold' : 'metal');
       if (def.entry) { k.box(2, 60, 3, hx, 75, zLeaf + 3.5, hm); k.box(2, 60, 3, hx, 75, zLeaf - 3.5, hm); }
       else { k.box(12, 2, 2, hx + (op.flipH ? 4 : -4), 100, zLeaf + 3, hm); k.box(12, 2, 2, hx + (op.flipH ? 4 : -4), 100, zLeaf - 3, hm); }
+      done();
     }
     return k.g;
   }
@@ -1013,9 +1031,12 @@ export function buildOpeningObject(op, wallT, pal) {
     for (let i = 0; i < 2; i++) {
       const x = (i ? 1 : -1) * (w / 4 - 1.5), z = (i ? 1 : -1) * 2.5;
       const solid = leafLook.finish !== 'glass';
+      // 前片（左）往右滑到後片前方
+      const done = i === 0 ? k.pivot(0, 0, { type: 'slide', dx: pw - 8 }) : null;
       k.box(pw, h - 7, solid ? 2.4 : 0.8, x, 3, z, solid ? finishMat(leafLook.finish, leafLook.color) : finishMat('glass', leafLook.color));
       k.box(3, h - 7, 3, x - pw / 2 + 1.5, 3, z, frameMat); k.box(3, h - 7, 3, x + pw / 2 - 1.5, 3, z, frameMat);
       k.box(pw, 3, 3, x, 3, z, frameMat); k.box(pw, 3, 3, x, h - 7, z, frameMat);
+      done?.();
     }
     return k.g;
   }
