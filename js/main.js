@@ -5,7 +5,7 @@ import { Plan2D, isTyping } from './editor/plan2d.js';
 import { View3D } from './editor/view3d.js';
 import { CATALOG, OPENINGS, CATALOG_MAP, OPENING_MAP, CATEGORIES, buildItemObject, itemParams, openingLook, LEAF_FINISHES, FRAME_FINISHES } from './data/catalog.js';
 import { MATERIALS, MATERIAL_MAP, materialSwatchURL, setMaterialSwatch } from './data/materials.js';
-import { ThumbStudio, paintStudioBackground } from './ui/thumbs.js';
+import { ThumbStudio, THUMB_SIZE, looksBroken, thumbKey, thumbCacheGetAll, thumbCachePut } from './ui/thumbs.js';
 import { STYLES, STYLE_MAP, paletteFor } from './data/styles.js';
 import { SAMPLES } from './data/samples.js';
 import { detectRooms, polygonArea, polygonCentroid, pointInPolygon, wallLength, clamp, areaText, toWallLocal, PING, largestInnerRect } from './core/geometry.js';
@@ -208,52 +208,81 @@ class App {
     ctx.restore();
   }
 
-  // 寫實 3D 縮圖：家具、門窗與材質在攝影棚光線下以物理材質拍攝（閒置時逐一產生）
-  renderThumbnails() {
+  // 寫實縮圖：家具、門窗與材質擺在房間一角拍攝。先以快速渲染產生預覽，再以光線追蹤重拍成接近實景照片；
+  // 光線追蹤完成的縮圖存在瀏覽器，下次開啟直接使用。換風格時地板、牆面與家具配色跟著改變。
+  async renderThumbnails() {
     const run = (this.thumbRun = (this.thumbRun || 0) + 1);
-    let studio;
-    try { studio = new ThumbStudio(); } catch { return; }
-    const pal = paletteFor(store.project.design.styleId);
-    const queue = [
-      ...CATALOG.map((def) => ({ id: def.id, shot: () => studio.item(def, pal) })),
-      ...OPENINGS.map((def) => ({ id: def.id, shot: () => studio.opening(def, pal) })),
+    const stale = () => run !== this.thumbRun;
+    const styleId = store.project.design.styleId || '';
+    const style = STYLE_MAP[styleId];
+    const pal = paletteFor(styleId);
+    const floorId = style?.materials?.floor?.default || 'wood_oak';
+    const wallId = style?.materials?.wall?.default || 'paint_warm';
+    const scene = `${styleId}|${floorId}|${wallId}`;
+    const jobs = [
+      ...CATALOG.map((def) => ({ key: thumbKey('item', scene, def.id), id: def.id, kind: { type: 'item', def, pal } })),
+      ...OPENINGS.map((def) => ({ key: thumbKey('opening', scene, def.id), id: def.id, kind: { type: 'opening', def, pal } })),
+      ...MATERIALS.map((m) => ({ key: thumbKey('material', m.id), mat: m.id, kind: { type: 'material', id: m.id } })),
     ];
-    // 材質與風格無關，只需產生一次
-    if (!this.matThumbsDone) {
-      for (const m of MATERIALS) queue.push({ mat: m.id, shot: () => studio.material(m.id) });
-    }
-    const idle = window.requestIdleCallback || ((f) => setTimeout(f, 16));
-    const step = () => {
-      if (run !== this.thumbRun) { studio.dispose(); return; }
-      const job = queue.shift();
-      if (!job) {
-        studio.dispose();
-        this.matThumbsDone = true;
+    const apply = (job, img) => {
+      if (job.mat) {
+        const url = typeof img === 'string' ? img : toJPEG(img, 160);
+        setMaterialSwatch(job.mat, url);
+        for (const el of $$(`img[data-mat="${job.mat}"]`)) el.src = url;
         return;
       }
-      try {
-        const img = job.shot();
-        if (job.mat) {
-          const s = document.createElement('canvas');
-          s.width = s.height = 160;
-          const ctx = s.getContext('2d');
-          paintStudioBackground(ctx, 160, 160);
-          ctx.drawImage(img, 0, 0, 160, 160);
-          const url = s.toDataURL('image/jpeg', 0.88);
-          setMaterialSwatch(job.mat, url);
-          for (const el of $$(`img[data-mat="${job.mat}"]`)) el.src = url;
-        } else {
-          for (const c of $$(`.cards .card[data-kind="${job.id}"] canvas`)) {
-            const ctx = c.getContext('2d');
-            ctx.setTransform(1, 0, 0, 1, 0, 0);
-            paintStudioBackground(ctx, c.width, c.height);
-            ctx.drawImage(img, 0, 0, c.width, c.height);
-          }
+      const draw = (src) => {
+        if (stale()) return;
+        for (const c of $$(`.cards .card[data-kind="${job.id}"] canvas`)) {
+          const ctx = c.getContext('2d');
+          ctx.setTransform(1, 0, 0, 1, 0, 0);
+          ctx.drawImage(src, 0, 0, c.width, c.height);
         }
-      } catch (e) { console.warn('縮圖產生失敗', job.id || job.mat, e); }
-      idle(step);
+      };
+      if (typeof img !== 'string') { draw(img); return; }
+      const im = new Image();
+      im.onload = () => draw(im);
+      im.src = img;
     };
-    setTimeout(step, 300);
+    // 1. 已存好的照片直接使用
+    const cached = await thumbCacheGetAll(jobs.map((j) => j.key));
+    if (stale()) return;
+    const todo = [];
+    for (const j of jobs) { if (cached.has(j.key)) apply(j, cached.get(j.key)); else todo.push(j); }
+    if (!todo.length) return;
+    let studio;
+    try { studio = new ThumbStudio({ floorId, wallId }); } catch { return; }
+    const idle = () => new Promise((res) => (window.requestIdleCallback ? requestIdleCallback(() => res(), { timeout: 400 }) : setTimeout(res, 16)));
+    try {
+      // 2. 快速預覽（材質預覽只需產生一次）
+      await new Promise((res) => setTimeout(res, 300));
+      for (const j of todo) {
+        if (stale()) return;
+        if (j.mat && this.matPreviewDone) continue;
+        try { apply(j, studio.shoot(j.kind)); } catch (e) { console.warn('縮圖產生失敗', j.id || j.mat, e); }
+        await idle();
+      }
+      this.matPreviewDone = true;
+      // 3. 光線追蹤重拍
+      try { await studio.initTracer(); } catch (e) { console.warn('縮圖光線追蹤無法使用', e); return; }
+      const samples = this.isMobileLayout() ? 48 : 128;
+      const paused = () => !!this.studio?.running || !!this.view3d?.vr?.active;
+      let checked = false;
+      for (const j of todo) {
+        if (stale()) return;
+        await idle();
+        let out;
+        try { out = await studio.trace(j.kind, { samples, shouldStop: stale, paused }); } catch (e) { console.warn('縮圖光線追蹤失敗', j.id || j.mat, e); return; }
+        if (!out) return;
+        // 第一張檢查畫面是否正常（部分顯示卡無法正確執行光線追蹤）
+        if (!checked) { checked = true; if (looksBroken(out)) { console.warn('縮圖光線追蹤畫面異常，保留快速預覽'); return; } }
+        const url = toJPEG(out, j.mat ? 160 : THUMB_SIZE);
+        apply(j, url);
+        thumbCachePut(j.key, url);
+      }
+    } finally {
+      studio.dispose();
+    }
   }
 
   buildMaterialsUI() {
@@ -1413,6 +1442,14 @@ class App {
 }
 
 // 秒數轉成「1 分 05 秒」
+// 畫布轉成 JPEG 網址（縮圖快取用）
+function toJPEG(src, size) {
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  c.getContext('2d').drawImage(src, 0, 0, size, size);
+  return c.toDataURL('image/jpeg', 0.9);
+}
+
 function fmtDuration(sec) {
   sec = Math.max(0, Math.round(sec || 0));
   if (sec < 60) return `${sec} 秒`;
