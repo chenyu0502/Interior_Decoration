@@ -486,22 +486,94 @@ function buildCabinet(k, w, d, h, { doors = 0, drawers = 0, legH = null, body = 
   k.box(w, bh, d, 0, lh, 0, bodyMat, r);
 }
 
-// 冰箱：上冷凍、下冷藏兩扇門（右側鉸鏈），內部白色並有層板
+// 馬桶：水箱、馬桶座圈與可掀起的馬桶蓋（後緣為轉軸）
+function buildToilet(k, w, d, h) {
+  const c = mat(k.pal.ceramic, 'ceramic');
+  k.box(w, h - 30, 18, 0, 30, -d / 2 + 9, c, 3);
+  const b = k.cyl(w / 2 - 1, w / 2 - 6, 40, 0, 0, 6, c, 32); b.scale.z = 1.35;
+  // 便器內部（積水）
+  const water = new THREE.Mesh(new THREE.CircleGeometry(w / 2 - 6, 32), mat('#b9d4dc', 'glass', { opacity: 0.85 }));
+  water.rotation.x = -Math.PI / 2; water.scale.y = 1.3; water.position.set(0, 39.5, 7); k.add(water);
+  // 座圈
+  const seat = new THREE.Mesh(new THREE.TorusGeometry(w / 2 - 4.5, 3.2, 10, 40), c);
+  seat.rotation.x = Math.PI / 2; seat.scale.y = 1.3; seat.scale.z = 0.45; seat.position.set(0, 41.5, 6); k.add(seat);
+  // 馬桶蓋
+  const hz = -d / 2 + 18;
+  const done = k.pivot(0, hz, { type: 'flip', angle: -THREE.MathUtils.degToRad(86), y: 43.5 });
+  const lid = k.cyl(w / 2 - 0.5, w / 2 - 0.5, 2, 0, 43, 8, c, 40); lid.scale.z = 1.28;
+  done();
+}
+
+// 冰箱：上冷凍、下冷藏兩扇門（右側鉸鏈）；中空櫃體，打開後看得到層板、飲料、水果與冷凍食品
 function buildFridge(k, w, d, h) {
   const m = mat(k.pal.legs === 'metal' ? '#3a3b3d' : '#d9dcdf', 'metal', { metalness: 0.6, roughness: 0.3 });
   const inner = mat('#f4f6f7', 'gloss');
-  const t = 4, cd = d - t, cz = -t / 2, split = h * 0.62;
-  k.box(w, h, cd, 0, 0, cz, m, 2);
-  // 內部（比外殼小一圈，打開後可見）
-  k.box(w - 5, split - 6, 0.5, 0, 3, cz + cd / 2 - 0.1, inner);
-  k.box(w - 5, h - split - 6, 0.5, 0, split + 3, cz + cd / 2 - 0.1, inner);
-  for (const y of [split * 0.35, split * 0.68]) k.box(w - 6, 0.6, 2, 0, y, cz + cd / 2 - 1, mat('#dfe9ee', 'glass'));
+  const t = 4, cd = d - t, cz = -t / 2, split = h * 0.62, wall = 3;
+  // 外殼（中空）與白色內膽
+  carcass(k, w, h, cd, 0, 0, cz, m, { shelves: 0, t: wall, inner });
+  const iw = w - wall * 2, zb = cz - cd / 2 + wall, zf = cz + cd / 2;
+  const id = zf - zb;
+  k.box(0.4, h - wall * 2, id, -iw / 2 + 0.2, wall, zb + id / 2, inner);
+  k.box(0.4, h - wall * 2, id, iw / 2 - 0.2, wall, zb + id / 2, inner);
+  k.box(iw, wall, id, 0, wall, zb + id / 2, inner);
+  k.box(iw, 4, id, 0, split - 2, zb + id / 2, inner); // 冷凍與冷藏之間的隔板
+  k.box(iw, wall, id, 0, h - wall * 2, zb + id / 2, inner);
+  k.box(iw * 0.9, 0.6, 1, 0, h - wall * 2 - 1, zf - 2, mat('#fffaf0', 'emissive', { emissiveIntensity: 0.6 })); // 冷藏燈
+  // 層板（前方留空間給門上的置物架）
+  const sd = id - 11, sz = zb + sd / 2;
+  const glassShelf = mat('#dfe9ee', 'glass');
+  const shelfY = [wall + (split - wall) * 0.36, wall + (split - wall) * 0.68];
+  for (const y of shelfY) k.box(iw - 1, 0.6, sd, 0, y, sz, glassShelf);
+  const freezeShelf = split + 2 + (h - wall - split - 2) * 0.5;
+  k.box(iw - 1, 0.6, sd, 0, freezeShelf, sz, mat('#e9eef1', 'matte'));
+  // 冷藏室底層：蔬果盒與水果
+  const y0 = wall;
+  k.box(iw - 3, 14, sd - 2, 0, y0, sz, mat('#e7f0ea', 'glass', { opacity: 0.35 }));
+  const fruits = [['#c8282a', 4], ['#e88a1a', 4.2], ['#c8282a', 3.8], ['#9cbf3a', 3.6], ['#e88a1a', 4]];
+  fruits.forEach(([c, r], i) => k.sphere(r, -iw / 2 + 9 + i * ((iw - 18) / (fruits.length - 1)), y0 + r + 1, sz + ((i % 2) ? 6 : -4), mat(c, 'gloss', { roughness: 0.35 })));
+  // 第一層：牛奶、果汁、保鮮盒、雞蛋
+  const y1 = shelfY[0] + 0.6;
+  k.box(9, 22, 7, -iw / 2 + 8, y1, sz - 6, mat('#f7f7f5', 'matte'));
+  k.box(9, 3, 7, -iw / 2 + 8, y1 + 22, sz - 6, mat('#2f6db3', 'matte'));
+  k.box(8, 20, 6, -iw / 2 + 19, y1, sz - 4, mat('#f0a22e', 'matte'));
+  k.box(18, 8, 13, 6, y1, sz - 2, mat('#ffffff', 'glass', { opacity: 0.5 }));
+  k.box(18, 1.2, 13, 6, y1 + 8, sz - 2, mat('#4aa36b', 'gloss'));
+  k.box(16, 5, 10, iw / 2 - 11, y1, sz + 4, mat('#d9c8a8', 'matte'));
+  for (let i = 0; i < 4; i++) k.sphere(1.8, iw / 2 - 16 + i * 3.4, y1 + 6, sz + 4, mat('#f3e3c7', 'matte'), 1.25);
+  // 第二層：罐裝飲料與沙拉碗
+  const y2 = shelfY[1] + 0.6;
+  for (let i = 0; i < 5; i++) k.cyl(3.2, 3.2, 12, -iw / 2 + 7 + i * 6.8, y2, sz - 8, mat(['#c8202a', '#1e5aa8', '#c8202a', '#e2b616', '#1e5aa8'][i], 'metal', { metalness: 0.6, roughness: 0.35 }), 16);
+  k.cyl(10, 7, 7, iw / 2 - 14, y2, sz + 2, mat('#f3f1ec', 'ceramic'), 24);
+  k.sphere(6, iw / 2 - 14, y2 + 7, sz + 2, mat('#6aa84f', 'matte'), 0.45);
+  // 冷凍室：冰塊盒、冷凍食品
+  const yf = split + 2.6;
+  k.box(22, 5, 12, -iw / 2 + 14, yf, sz, mat('#cfe6f2', 'glass', { opacity: 0.6 }));
+  k.box(16, 9, 12, 8, yf, sz - 4, mat('#3f7fc4', 'gloss'));
+  k.box(12, 6, 16, iw / 2 - 9, yf, sz + 2, mat('#e8eef2', 'matte'));
+  k.box(20, 10, 14, -4, freezeShelf + 0.6, sz, mat('#b9473a', 'gloss'));
+  k.box(14, 7, 12, iw / 2 - 10, freezeShelf + 0.6, sz - 3, mat('#f2f2f0', 'matte'));
   const chrome = mat('#bbb', 'chrome');
-  for (const [y0, hh] of [[0, split - 0.3], [split + 0.3, h - split - 0.3]]) {
+  const binM = mat('#eef4f7', 'glass', { opacity: 0.45 });
+  for (const [yd, hh] of [[0, split - 0.3], [split + 0.3, h - split - 0.3]]) {
     const done = k.pivot(w / 2 - 0.5, d / 2 - t / 2, { type: 'swing', angle: THREE.MathUtils.degToRad(100) });
-    k.box(w, hh, t, 0, y0, d / 2 - t / 2, m, 1.5);
-    k.box(w - 8, 0.4, 0.6, 0, y0 + hh - 3, d / 2 - t - 0.2, inner); // 門內側
-    k.box(1.5, 40, 2, -w / 2 + 6, y0 === 0 ? split - 44 : split + 4, d / 2 + 1, chrome);
+    k.box(w, hh, t, 0, yd, d / 2 - t / 2, m, 1.5);
+    k.box(w - 8, hh - 8, 0.4, 0, yd + 4, d / 2 - t - 0.2, inner); // 門內側
+    k.box(1.5, 40, 2, -w / 2 + 6, yd === 0 ? split - 44 : split + 4, d / 2 + 1, chrome);
+    // 門上的置物架與飲料瓶（隨門轉動）
+    const bz = d / 2 - t - 4.5;
+    const bins = yd === 0 ? [yd + 8, yd + (split - 8) * 0.55] : [yd + 6];
+    bins.forEach((by, bi) => {
+      k.box(w - 12, 6, 8, 0, by, bz, binM);
+      const kinds = yd === 0 && bi === 0 ? ['#2f7d4a', '#7a4a1f', '#d9eef5', '#d9eef5'] : yd === 0 ? ['#f0c419', '#e8e3d8', '#c0392b'] : ['#e8eef2', '#e8eef2'];
+      kinds.forEach((c, i) => {
+        const x = -w / 2 + 12 + i * ((w - 24) / Math.max(1, kinds.length - 1));
+        const tallB = yd === 0 && bi === 0;
+        if (tallB) {
+          k.cyl(3, 3, 22, x, by + 0.6, bz, mat(c, 'glass', { opacity: 0.75 }), 14);
+          k.cyl(1.2, 1.2, 3, x, by + 22.6, bz, mat(i < 2 ? '#d4af37' : '#2f6db3', 'matte'), 8);
+        } else k.box(6, yd === 0 ? 10 : 5, 5, x, by + 0.6, bz, mat(c, 'matte'));
+      });
+    });
     done();
   }
 }
@@ -961,7 +1033,7 @@ export const CATALOG = [
   },
   { id: 'washer', name: '洗衣機', cat: 'kitchen', w: 60, d: 62, h: 85, roles: [], plan: (ctx, w, d, lw) => { P.rect(ctx, w, d, lw, '#f5f5f5', 2); P.circle(ctx, 0, 6, Math.min(w, d) * 0.3, lw, '#e0e6ea'); }, build: (k, w, d, h) => { k.box(w, h, d, 0, 0, 0, mat('#f3f3f3', 'gloss'), 2); const drum = k.cyl(14, 14, 1, 0, 0, 0, mat('#2a2f33', 'matte'), 32); drum.rotation.x = Math.PI / 2; drum.position.set(0, h * 0.45, d / 2 + 0.1); const done = k.pivot(-18.5, d / 2 + 1, { type: 'swing', angle: -THREE.MathUtils.degToRad(100) }); const door = new THREE.Mesh(new THREE.TorusGeometry(16, 2.5, 10, 32), mat('#bfc5c9', 'chrome')); door.position.set(0, h * 0.45, d / 2 + 1); k.add(door); const g = new THREE.Mesh(new THREE.CircleGeometry(15, 32), mat('#4a5a66', 'glass', { opacity: 0.6 })); g.position.set(0, h * 0.45, d / 2 + 0.6); k.add(g); k.box(3, 6, 2, 15, h * 0.45 - 3, d / 2 + 2, mat('#9aa1a6', 'chrome')); done(); } },
   // ---- 衛浴
-  { id: 'toilet', name: '馬桶', cat: 'bath', w: 40, d: 70, h: 78, roles: ['ceramic'], plan: (ctx, w, d, lw) => { rr(ctx, -w / 2, -d / 2, w, 18, 3); fillStroke(ctx, '#fff', lw); ctx.beginPath(); ctx.ellipse(0, 8, w / 2 - 2, d / 2 - 12, 0, 0, Math.PI * 2); fillStroke(ctx, '#fff', lw); }, build: (k, w, d, h) => { const c = mat(k.pal.ceramic, 'ceramic'); k.box(w, h - 30, 18, 0, 30, -d / 2 + 9, c, 3); const b = k.cyl(w / 2 - 1, w / 2 - 6, 40, 0, 0, 6, c, 32); b.scale.z = 1.35; const s = k.cyl(w / 2, w / 2, 3, 0, 40, 6, c, 32); s.scale.z = 1.3; } },
+  { id: 'toilet', name: '馬桶', cat: 'bath', w: 40, d: 70, h: 78, roles: ['ceramic'], plan: (ctx, w, d, lw) => { rr(ctx, -w / 2, -d / 2, w, 18, 3); fillStroke(ctx, '#fff', lw); ctx.beginPath(); ctx.ellipse(0, 8, w / 2 - 2, d / 2 - 12, 0, 0, Math.PI * 2); fillStroke(ctx, '#fff', lw); }, build: (k, w, d, h) => buildToilet(k, w, d, h) },
   { id: 'vanity', name: '浴櫃洗手台', cat: 'bath', w: 80, d: 50, h: 85, roles: ['wood', 'stone'], plan: (ctx, w, d, lw, pal) => { P.rect(ctx, w, d, lw, tint(pal.wood, 0.3), 1); ctx.beginPath(); ctx.ellipse(0, 2, w * 0.3, d * 0.3, 0, 0, Math.PI * 2); fillStroke(ctx, '#fff', lw); }, build: (k, w, d, h) => { const p = k.pal; const body = k.woodMat(); carcass(k, w, h - 23, d - 3.8, 0, 20, -1.9, body, { shelves: 0 }); k.cyl(2, 2, h - 30, 0, 22, -d / 2 + 10, mat('#e6e6e6', 'matte'), 10); hingedDoors(k, w >= 70 ? 2 : 1, -w / 2, w, 20.3, h - 23.6, d / 2 - 2, body, { r: 0.4, each: (i, x, cw, hingeLeft) => { if (p.legs !== 'metal') k.handle(x + (hingeLeft ? cw * 0.36 : -cw * 0.36), 20 + (h - 23) * 0.62, d / 2 - 1.6, 10); } }); k.box(w, 3, d, 0, h - 3, 0, mat(p.stone, 'stone')); const b = k.cyl(w * 0.22, w * 0.18, 12, 0, h, 2, mat(p.ceramic, 'ceramic'), 32); b.scale.z = 0.8; k.cyl(1, 1, 22, 0, h, -d / 2 + 6, mat(p.legs === 'gold' || p.legs === 'plinth' ? '#b8954f' : '#cfcfcf', p.legs === 'gold' || p.legs === 'plinth' ? 'gold' : 'chrome'), 10); k.box(2, 2, 12, 0, h + 20, -d / 2 + 11, mat(p.legs === 'gold' || p.legs === 'plinth' ? '#b8954f' : '#cfcfcf', p.legs === 'gold' || p.legs === 'plinth' ? 'gold' : 'chrome')); } },
   { id: 'bathtub', name: '浴缸', cat: 'bath', w: 170, d: 75, h: 58, roles: ['ceramic'], plan: (ctx, w, d, lw) => { rr(ctx, -w / 2, -d / 2, w, d, 8); fillStroke(ctx, '#fff', lw); rr(ctx, -w / 2 + 8, -d / 2 + 8, w - 16, d - 16, 25); fillStroke(ctx, '#eef5f8', lw); P.circle(ctx, w / 2 - 22, 0, 2.5, lw, '#999'); }, build: (k, w, d, h) => { const c = mat(k.pal.ceramic, 'ceramic'); k.box(w, h, 7, 0, 0, -d / 2 + 3.5, c, 2); k.box(w, h, 7, 0, 0, d / 2 - 3.5, c, 2); k.box(7, h, d, -w / 2 + 3.5, 0, 0, c, 2); k.box(7, h, d, w / 2 - 3.5, 0, 0, c, 2); k.box(w - 10, 8, d - 10, 0, 0, 0, c); k.box(w - 14, 1, d - 14, 0, h - 16, 0, mat('#bfe0ea', 'glass', { opacity: 0.45 })); } },
   { id: 'shower', name: '淋浴間', cat: 'bath', w: 90, d: 90, h: 200, roles: ['metal'], plan: (ctx, w, d, lw) => { P.rect(ctx, w, d, lw, '#eef5f8', 1); P.line(ctx, -w / 2, -d / 2, w / 2, d / 2, lw); P.line(ctx, w / 2, -d / 2, -w / 2, d / 2, lw); P.circle(ctx, 0, 0, 3, lw, '#999'); }, build: (k, w, d, h) => { k.box(w, 4, d, 0, 0, 0, mat('#ececec', 'ceramic')); const g = mat('#cfe3ea', 'glass'); const f = mat(k.pal.legs === 'gold' ? k.pal.metal : '#2b2b2b', k.pal.legs === 'gold' ? 'gold' : 'metal'); const done = k.pivot(-w / 2 + 1, d / 2 - 0.5, { type: 'swing', angle: -THREE.MathUtils.degToRad(85) }); k.box(w - 2, h - 8, 0.8, 0, 5, d / 2 - 0.5, g); k.box(1.5, 30, 2.5, w / 2 - 8, 95, d / 2 + 1.2, mat('#cfcfcf', 'chrome')); done(); k.box(0.8, h - 4, d, w / 2 - 0.5, 4, 0, g); k.box(w, 2, 2, 0, h - 2, d / 2 - 0.5, f); k.box(2, 2, d, w / 2 - 0.5, h - 2, 0, f); k.cyl(1, 1, 60, -w / 2 + 6, h - 70, -d / 2 + 4, f, 8); k.cyl(10, 10, 1.5, -w / 2 + 20, h - 12, -d / 2 + 18, f, 24); } },
