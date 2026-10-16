@@ -392,7 +392,7 @@ function buildTable(k, w, d, h, { top = 'wood', round = false, pedestal = false 
   }
 }
 
-function buildCabinet(k, w, d, h, { doors = 0, drawers = 0, legH = null, body = null, open = false, glass = false, books = false } = {}) {
+function buildCabinet(k, w, d, h, { doors = 0, drawers = 0, legH = null, body = null, open = false, glass = false, books = false, contents = null } = {}) {
   const p = k.pal;
   const lh = legH !== null ? legH : p.legs === 'plinth' ? 6 : p.low ? 6 : 12;
   const bodyMat = body || (p.legs === 'gold' ? k.woodMat(p.wood) : mat(p.lacquer, 'matte'));
@@ -438,18 +438,16 @@ function buildCabinet(k, w, d, h, { doors = 0, drawers = 0, legH = null, body = 
     // 有門的櫃子：中空櫃體 + 可開的門片
     const cd = d - 1.8, cz = -0.9;
     const tall = bh > 150;
-    carcass(k, w, bh, cd, 0, lh, cz, bodyMat, { shelves: tall ? (d >= 50 ? 1 : Math.max(2, Math.round(bh / 45) - 1)) : 1 });
-    if (tall && d >= 50) {
-      // 衣櫃：上層層板下方掛衣桿與衣物
-      const rodY = lh + bh / 2 - 8;
-      const rod = k.cyl(1, 1, w - 4, 0, 0, cz, k.metalMat(), 10);
-      rod.rotation.z = Math.PI / 2; rod.position.y = rodY;
-      const rnd = mulberry32(hashStr(`wr${w}${h}`));
-      const cols = [p.fabric, p.fabric2, '#e9e4dc', '#3d4552', '#9b8a74', '#c9cdd2'];
-      for (let x = -w / 2 + 8; x < w / 2 - 8; x += 7 + rnd() * 5) {
-        const ch = 55 + rnd() * 45;
-        k.box(1.6, ch, cd * 0.7, x, rodY - ch - 1, cz, mat(cols[Math.floor(rnd() * cols.length)], 'fabric'));
-      }
+    const shoes = contents === 'shoes';
+    const nShelf = shoes ? Math.max(2, Math.floor(bh / 26) - 1) : tall ? (d >= 50 ? 1 : Math.max(2, Math.round(bh / 45) - 1)) : 1;
+    carcass(k, w, bh, cd, 0, lh, cz, bodyMat, { shelves: nShelf });
+    if (contents === 'clothes' || (!contents && tall && d >= 50)) fillWardrobe(k, w, bh, cd, lh, cz);
+    if (shoes) {
+      // 鞋櫃：每層放幾雙鞋（底板與各層板的上緣）
+      const levels = [lh + 1.8];
+      for (let i = 1; i <= nShelf; i++) levels.push(lh + (bh * i) / (nShelf + 1) + 0.9);
+      const space = bh / (nShelf + 1) - 2;
+      levels.forEach((y, li) => fillShoes(k, w - 4, y, cd - 4, cz, space, li));
     }
     if (glass) {
       const n = Math.max(1, Math.round(w / 50));
@@ -484,6 +482,72 @@ function buildCabinet(k, w, d, h, { doors = 0, drawers = 0, legH = null, body = 
     return;
   }
   k.box(w, bh, d, 0, lh, 0, bodyMat, r);
+}
+
+// 衣櫃內部：上層層板放摺好的衣物與收納盒，下方吊衣桿掛著有衣架的上衣、外套與長褲
+function fillWardrobe(k, w, bh, cd, lh, cz) {
+  const p = k.pal;
+  const rnd = mulberry32(hashStr(`wr${w}${bh}`));
+  const cols = [p.fabric, p.fabric2, '#e9e4dc', '#3d4552', '#9b8a74', '#c9cdd2', '#7b2d2d', '#2f4858', '#f2efe8'];
+  const pick = () => mat(cols[Math.floor(rnd() * cols.length)], 'fabric');
+  const shelfTop = lh + bh / 2 + 0.9, rodY = lh + bh / 2 - 8;
+  const rod = k.cyl(1, 1, w - 4, 0, 0, cz, k.metalMat(), 10);
+  rod.rotation.z = Math.PI / 2; rod.position.y = rodY;
+  // 摺好的衣物堆與收納盒
+  for (let x = -w / 2 + 14; x < w / 2 - 14; x += 30 + rnd() * 8) {
+    if (rnd() < 0.25) { k.box(26, 18, cd * 0.7, x, shelfTop, cz, mat('#d8cbb3', 'matte'), 0.5); continue; }
+    let y = shelfTop;
+    const n = 3 + Math.floor(rnd() * 4);
+    for (let i = 0; i < n; i++) { const th = 3.5 + rnd() * 2; k.box(24 + rnd() * 3, th, cd * 0.6, x + (rnd() - 0.5) * 2, y, cz + 2, pick(), 1); y += th; }
+  }
+  // 吊掛衣物：衣架（掛勾 + 肩架）加上衣服；寬度方向沿櫃子深度
+  const hangerM = k.pal.legs === 'gold' ? mat(p.metal, 'gold') : mat('#c9a77c', 'wood');
+  const gw = Math.min(42, cd * 0.75);
+  for (let x = -w / 2 + 7; x < w / 2 - 6; x += 5.5 + rnd() * 3.5) {
+    const kind = rnd();
+    k.cyl(0.3, 0.3, 4, x, rodY - 2, cz, hangerM, 6);
+    k.box(1, 1.2, gw, x, rodY - 4.5, cz, hangerM, 0.4);
+    const m = pick();
+    if (kind < 0.25) {
+      // 長褲：對摺掛在衣架橫桿上
+      const ph = 45 + rnd() * 10;
+      k.box(2.2, ph, gw * 0.55, x, rodY - 5 - ph, cz, m, 0.8);
+    } else {
+      // 上衣 / 外套：肩部較寬、衣身略窄
+      const len = kind < 0.6 ? 62 + rnd() * 10 : 85 + rnd() * 20;
+      const th = kind < 0.6 ? 2 : 3.5;
+      k.box(th, 10, gw, x, rodY - 15, cz, m, 1);
+      k.box(th, len - 10, gw * 0.88, x, rodY - 5 - len, cz, m, 1);
+    }
+  }
+}
+
+// 鞋櫃一層：成對的鞋子（球鞋、皮鞋、休閒鞋），鞋頭朝外
+function fillShoes(k, w, y, depth, cz, space, level) {
+  const rnd = mulberry32(hashStr(`shoe${w}${level}`));
+  const kinds = [
+    { upper: '#f4f4f2', sole: '#d9d9d9', h: 8 }, { upper: '#2a2a2c', sole: '#1a1a1a', h: 7 },
+    { upper: '#6b4226', sole: '#2b1d14', h: 7 }, { upper: '#3d5a80', sole: '#f0f0f0', h: 8 },
+    { upper: '#c9b28f', sole: '#7a5c3e', h: 7.5 }, { upper: '#b23a48', sole: '#f2f2f2', h: 8 },
+  ];
+  const len = Math.min(27, depth - 4);
+  const z = cz + (depth - len) / 2 - 2; // 靠前放
+  for (let x = -w / 2 + 2; x + 20 < w / 2; x += 22 + rnd() * 4) {
+    if (rnd() < 0.15) continue;
+    const s = kinds[Math.floor(rnd() * kinds.length)];
+    const sh = Math.min(s.h, space - 2);
+    const up = mat(s.upper, s.upper === '#2a2a2c' || s.upper === '#6b4226' ? 'gloss' : 'fabric'), so = mat(s.sole, 'matte');
+    const lining = mat('#2b2622', 'matte');
+    for (const dx of [4.8, 14.6]) {
+      const sx = x + dx;
+      // 鞋底、後跟、鞋面（前端圓弧）與鞋口
+      k.box(9, 1.6, len, sx, y, z, so, 0.7);
+      k.box(8.4, sh - 1.6, len * 0.42, sx, y + 1.6, z - len * 0.29, up, 2.2);
+      const vamp = k.sphere(4.3, sx, y + 1.6, z + len * 0.12, up);
+      vamp.scale.set(1, (sh - 2) / 4.3 * 0.8, (len * 0.4) / 4.3);
+      k.box(6.4, 0.5, len * 0.3, sx, y + sh - 0.3, z - len * 0.27, lining, 0.2);
+    }
+  }
 }
 
 // 馬桶：水箱、馬桶座圈與可掀起的馬桶蓋（後緣為轉軸）
@@ -974,7 +1038,7 @@ export const CATALOG = [
   { id: 'bed_queen', name: '雙人床 5×6.2 尺', cat: 'bedroom', w: 156, d: 200, h: 100, roles: ['wood', 'fabric2'], plan: planBed, build: buildBed },
   { id: 'bed_single', name: '單人床 3.5 尺', cat: 'bedroom', w: 110, d: 196, h: 95, roles: ['wood', 'fabric2'], plan: planBed, build: buildBed },
   { id: 'nightstand', name: '床頭櫃', cat: 'bedroom', w: 48, d: 40, h: 50, roles: ['lacquer', 'wood2'], plan: planCabinet, build: (k, w, d, h) => buildCabinet(k, w, d, h, { drawers: 2 }) },
-  { id: 'wardrobe', name: '衣櫃', cat: 'bedroom', w: 180, d: 60, h: 230, roles: ['lacquer', 'wood2'], plan: planWardrobe, build: (k, w, d, h) => buildCabinet(k, w, d, h, { doors: Math.max(2, Math.round(w / 45)), legH: 6 }) },
+  { id: 'wardrobe', name: '衣櫃', cat: 'bedroom', w: 180, d: 60, h: 230, roles: ['lacquer', 'wood2'], plan: planWardrobe, build: (k, w, d, h) => buildCabinet(k, w, d, h, { doors: Math.max(2, Math.round(w / 45)), legH: 6, contents: 'clothes' }) },
   { id: 'dresser', name: '化妝台', cat: 'bedroom', w: 100, d: 45, h: 76, roles: ['wood', 'metal'], plan: planTable, build: (k, w, d, h) => { buildTable(k, w, d, h); deskDrawer(k, w * 0.3, h - 4, w * 0.3, 10, d - 4); const m = k.box(w * 0.5, 70, 2, 0, h, -d / 2 + 2, mat('#dfe7ea', 'mirror'), 1); void m; k.box(w * 0.5 + 3, 73, 1.5, 0, h - 1.5, -d / 2 + 0.8, k.woodMat(), 1); } },
   { id: 'chest', name: '斗櫃', cat: 'bedroom', w: 90, d: 45, h: 100, roles: ['lacquer', 'wood2'], plan: planCabinet, build: (k, w, d, h) => buildCabinet(k, w, d, h, { drawers: 4 }) },
   { id: 'table_lamp', name: '檯燈', cat: 'light', w: 30, d: 30, h: 48, elev: 50, roles: ['accent'], light: { intensity: 0.6, dist: 3 }, plan: planLamp, build: (k, w, d, h) => { k.cyl(6, 7, 3, 0, 0, 0, k.metalMat(), 16); k.cyl(0.8, 0.8, h - 20, 0, 3, 0, k.metalMat(), 8); buildLampShade(k, 0, h - 20, 0, w / 2, 20, 'drum'); } },
@@ -1039,7 +1103,7 @@ export const CATALOG = [
   { id: 'shower', name: '淋浴間', cat: 'bath', w: 90, d: 90, h: 200, roles: ['metal'], plan: (ctx, w, d, lw) => { P.rect(ctx, w, d, lw, '#eef5f8', 1); P.line(ctx, -w / 2, -d / 2, w / 2, d / 2, lw); P.line(ctx, w / 2, -d / 2, -w / 2, d / 2, lw); P.circle(ctx, 0, 0, 3, lw, '#999'); }, build: (k, w, d, h) => { k.box(w, 4, d, 0, 0, 0, mat('#ececec', 'ceramic')); const g = mat('#cfe3ea', 'glass'); const f = mat(k.pal.legs === 'gold' ? k.pal.metal : '#2b2b2b', k.pal.legs === 'gold' ? 'gold' : 'metal'); const done = k.pivot(-w / 2 + 1, d / 2 - 0.5, { type: 'swing', angle: -THREE.MathUtils.degToRad(85) }); k.box(w - 2, h - 8, 0.8, 0, 5, d / 2 - 0.5, g); k.box(1.5, 30, 2.5, w / 2 - 8, 95, d / 2 + 1.2, mat('#cfcfcf', 'chrome')); done(); k.box(0.8, h - 4, d, w / 2 - 0.5, 4, 0, g); k.box(w, 2, 2, 0, h - 2, d / 2 - 0.5, f); k.box(2, 2, d, w / 2 - 0.5, h - 2, 0, f); k.cyl(1, 1, 60, -w / 2 + 6, h - 70, -d / 2 + 4, f, 8); k.cyl(10, 10, 1.5, -w / 2 + 20, h - 12, -d / 2 + 18, f, 24); } },
   { id: 'mirror', name: '鏡子 / 鏡櫃', cat: 'bath', w: 70, d: 4, h: 80, elev: 105, roles: ['metal'], plan: (ctx, w, d, lw) => P.rect(ctx, w, Math.max(d, 3), lw, '#dbe7ee', 1), build: (k, w, d, h) => { const p = k.pal; const round = p.soft >= 4; if (round) { const fr = new THREE.Mesh(new THREE.CylinderGeometry(Math.min(w, h) / 2, Math.min(w, h) / 2, 2, 48), p.legs === 'gold' ? mat(p.metal, 'gold') : k.woodMat()); fr.rotation.x = Math.PI / 2; fr.position.set(0, h / 2, -d / 2 + 1); k.add(fr); const mi = new THREE.Mesh(new THREE.CircleGeometry(Math.min(w, h) / 2 - 2, 48), mat('#e6eef2', 'mirror')); mi.position.set(0, h / 2, -d / 2 + 2.1); k.add(mi); } else { k.box(w, h, 2, 0, 0, -d / 2 + 1, p.legs === 'gold' ? mat(p.metal, 'gold') : mat('#2b2b2b', 'metal')); k.box(w - 3, h - 3, 0.4, 0, 1.5, -d / 2 + 2.2, mat('#e6eef2', 'mirror')); } } },
   // ---- 收納
-  { id: 'shoe_cabinet', name: '鞋櫃', cat: 'storage', w: 120, d: 40, h: 110, roles: ['lacquer', 'wood2'], plan: planCabinet, build: (k, w, d, h) => buildCabinet(k, w, d, h, { doors: Math.max(2, Math.round(w / 45)) }) },
+  { id: 'shoe_cabinet', name: '鞋櫃', cat: 'storage', w: 120, d: 40, h: 110, roles: ['lacquer', 'wood2'], plan: planCabinet, build: (k, w, d, h) => buildCabinet(k, w, d, h, { doors: Math.max(2, Math.round(w / 45)), contents: 'shoes' }) },
   { id: 'tall_cabinet', name: '高櫃', cat: 'storage', w: 90, d: 45, h: 220, roles: ['lacquer', 'wood2'], plan: planWardrobe, build: (k, w, d, h) => buildCabinet(k, w, d, h, { doors: Math.max(1, Math.round(w / 45)), legH: 6 }) },
   {
     id: 'grid_shelf', name: '格子層櫃', cat: 'storage', w: 120, d: 35, h: 120, roles: ['wood', 'lacquer'],
