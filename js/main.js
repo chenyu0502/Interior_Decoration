@@ -18,6 +18,8 @@ import { VERSION, CHANGELOG, compareVersions } from './version.js';
 import { Updater } from './core/updater.js';
 import { mountPano, panoViewerHTML } from './editor/pano-viewer.js';
 import { vrSupported } from './editor/vr.js';
+import { TourPlayer, planTour, pickMime } from './editor/tour.js';
+import { pickEncoder } from './editor/mp4-mux.js';
 import { RenderStudio, RENDER_TIMES, RENDER_QUALITY, RENDER_ASPECTS, RENDER_ENGINES, RENDER_TONES } from './editor/render.js';
 import { analyzeFloorplan, buildProject, estimateScale, loadImageData } from './ai/floorplan-import.js';
 
@@ -950,6 +952,7 @@ class App {
         render: () => this.openRender(),
         assistant: () => this.toggleAssistant(),
         sun: () => this.sunPanel.toggle(),
+        tour: () => this.openTour(),
         live: () => { const l = this.view3d.live; l.setEnabled(!l.enabled); toast(l.enabled ? '實景模式已開啟：停止操作約 1 秒後，畫面會逐漸算成照片' : '實景模式已關閉'); },
         vr: () => this.toggleVR(),
         night: () => { store.update((p) => { p.settings.night = !p.settings.night; }, 'settings'); this.syncToggles(); },
@@ -1187,6 +1190,124 @@ class App {
       setTimeout(() => URL.revokeObjectURL(url), 5000);
     };
     img.src = src;
+  }
+
+  // 導覽影片：規劃路線、錄製、預覽、下載與分享
+  openTour() {
+    if (this.view3d.vr.active) { toast('請先離開 VR 再錄製導覽影片'); return; }
+    if (this.studio?.running) { toast('寫實渲染進行中，請等渲染完成再錄製'); return; }
+    if (!planTour(store.project)) { toast('平面圖中還沒有房間，請先畫出房間（或載入範例）'); return; }
+    const m = $('#tourModal');
+    if (!this.tourBound) {
+      this.tourBound = true;
+      m.addEventListener('click', (e) => {
+        if (e.target === m) { this.closeTour(); return; }
+        const a = e.target.closest('[data-tour]')?.dataset.tour;
+        if (a === 'close') this.closeTour();
+        else if (a === 'start') this.startTour();
+        else if (a === 'stop') this.tour?.stop(false);
+        else if (a === 'download' && this.tourVideo) download(this.tourVideo.url, this.tourVideo.name);
+        else if (a === 'share' && this.tourVideo) this.shareTour();
+      });
+      for (const id of ['#tAspect', '#tPace']) $(id).addEventListener('change', () => this.tourRoute());
+    }
+    if (!pickMime()) $('#tourStatus').textContent = '此瀏覽器不支援錄影，只能預覽運鏡；請改用 Chrome、Edge 或 Safari';
+    m.hidden = false;
+    this.tourRoute();
+  }
+
+  tourSize() {
+    const q = Number($('#tQuality').value);
+    const [a, b] = $('#tAspect').value.split(':').map(Number);
+    // 寬高取偶數（影片編碼需要）
+    const even = (x) => Math.round(x / 2) * 2;
+    return a >= b ? { width: even((q * a) / b), height: q } : { width: q, height: even((q * b) / a) };
+  }
+
+  // 顯示走訪順序與預估長度
+  tourRoute() {
+    const { width, height } = this.tourSize();
+    const plan = planTour(store.project, { aspect: width / height, pace: Number($('#tPace').value) });
+    if (!plan) return;
+    const walks = new Set(plan.shots.filter((s) => s.kind === 'walk').map((s) => plan.shots[plan.shots.indexOf(s) + 1]?.room?.id));
+    $('#tourRoute').innerHTML = `走訪順序（約 ${Math.round(plan.duration)} 秒）<ol>${plan.rooms.map((r, i) => `<li>${esc(r.name)}${i && !walks.has(r.id) ? ' <span>（淡出切換）</span>' : ''}</li>`).join('')}</ol>`;
+  }
+
+  tourButtons(running) {
+    const m = $('#tourModal');
+    m.querySelector('[data-tour="stop"]').disabled = !running;
+    m.querySelector('[data-tour="start"]').disabled = running;
+    m.querySelector('[data-tour="download"]').disabled = running || !this.tourVideo;
+    const share = m.querySelector('[data-tour="share"]');
+    share.hidden = !this.tourVideo?.file || !navigator.canShare?.({ files: [this.tourVideo.file] });
+    share.disabled = running;
+    for (const el of m.querySelectorAll('.render-opts select, .render-opts input')) el.disabled = running;
+  }
+
+  async startTour() {
+    if (this.tour || this.tourStarting) return;
+    const { width, height } = this.tourSize();
+    const host = $('#tourHost');
+    this.tourStarting = true;
+    const encoder = await pickEncoder(width, height).catch(() => null);
+    this.tourStarting = false;
+    if ($('#tourModal').hidden) return;
+    const record = !!encoder || !!pickMime();
+    if (this.tourVideo) { URL.revokeObjectURL(this.tourVideo.url); this.tourVideo = null; }
+    const player = new TourPlayer(this.view3d, {
+      width, height, record, encoder,
+      pace: Number($('#tPace').value), captions: $('#tCaptions').checked, openDoors: $('#tDoors').checked,
+      onProgress: (p, shot, t, total) => {
+        $('#tourBar').style.width = `${(p * 100).toFixed(1)}%`;
+        $('#tourPct').textContent = `${Math.round(p * 100)}%`;
+        $('#tourTime').textContent = `${fmtClock(t)} / ${fmtClock(total)}`;
+        const label = shot.kind === 'walk' ? '穿過門口' : shot.title ? (shot.outro ? '片尾空拍' : '片頭空拍') : shot.caption;
+        const speed = encoder && this.tourT0 ? ` · 製作速度 ${(t / ((performance.now() - this.tourT0) / 1000)).toFixed(1)} 倍` : '';
+        $('#tourStatus').textContent = `${encoder ? '製作中' : record ? '錄製中' : '預覽中'}：${label}${speed}`;
+      },
+      onDone: ({ blob, mime, completed, error }) => {
+        this.tour = null;
+        if (error) toast(`影片編碼失敗：${error.message || error}`);
+        $('#tourBarWrap').classList.toggle('done', completed);
+        if (blob && completed) {
+          const ext = mime.includes('mp4') ? 'mp4' : 'webm';
+          const name = `${store.project.name || '室內設計'}-導覽影片.${ext}`;
+          const url = URL.createObjectURL(blob);
+          let file = null;
+          try { file = new File([blob], name, { type: blob.type }); } catch { /* 舊版瀏覽器沒有 File 建構子 */ }
+          this.tourVideo = { url, name, file };
+          const video = document.createElement('video');
+          video.src = url; video.controls = true; video.playsInline = true; video.loop = true;
+          host.replaceChildren(video);
+          $('#tourStatus').textContent = `完成：${(blob.size / 1048576).toFixed(1)} MB · ${ext.toUpperCase()}`;
+        } else {
+          host.replaceChildren(Object.assign(document.createElement('div'), { className: 'render-empty', textContent: completed ? '預覽完成（此瀏覽器不支援錄影）' : error ? '影片編碼失敗' : '已停止錄製' }));
+          $('#tourStatus').textContent = completed ? '預覽完成' : error ? '編碼失敗' : '已停止';
+        }
+        this.tourButtons(false);
+      },
+    });
+    if (!player.ok) { toast('平面圖中還沒有房間'); return; }
+    this.tour = player;
+    $('#tourBarWrap').classList.remove('done');
+    host.replaceChildren(player.canvas);
+    this.tourButtons(true);
+    this.tourT0 = performance.now();
+    player.start();
+  }
+
+  async shareTour() {
+    const v = this.tourVideo;
+    try {
+      await navigator.share({ files: [v.file], title: v.name });
+    } catch (err) {
+      if (err?.name !== 'AbortError') toast(`無法分享：${err?.message || err}，請改用「下載影片」`);
+    }
+  }
+
+  closeTour() {
+    this.tour?.stop(false);
+    $('#tourModal').hidden = true;
   }
 
   closeRender() {
@@ -1543,6 +1664,7 @@ class App {
       if (e.key === 'Escape' && !$('#aiChat').hidden) { this.toggleAssistant(false); return; }
       if (!$('#reportModal').hidden) { if (e.key === 'Escape') $('#reportModal').hidden = true; return; }
       if (!$('#renderModal').hidden) { if (e.key === 'Escape') this.closeRender(); return; }
+      if (!$('#tourModal').hidden) { if (e.key === 'Escape') this.closeTour(); return; }
       if (!$('#updateModal').hidden) { if (e.key === 'Escape') $('#updateModal').querySelector('[data-update="later"], [data-update="close"]')?.click(); return; }
       const ctrl = e.ctrlKey || e.metaKey;
       if (this.view3d.mode === 'walk') {
@@ -1578,6 +1700,12 @@ function toJPEG(src, size) {
   c.width = c.height = size;
   c.getContext('2d').drawImage(src, 0, 0, size, size);
   return c.toDataURL('image/jpeg', 0.9);
+}
+
+// 秒數轉成「1:05」
+function fmtClock(sec) {
+  sec = Math.max(0, Math.floor(sec || 0));
+  return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
 }
 
 function fmtDuration(sec) {

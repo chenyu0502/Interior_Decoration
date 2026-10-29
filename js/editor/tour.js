@@ -1,0 +1,536 @@
+// 自動導覽影片：依門的連通關係排出走訪順序，從空拍開場、穿過門走進每個房間，
+// 每個房間以「角落推軌加橫移」運鏡，最後再拉回空拍收尾；錄成影片供下載與分享。
+import * as THREE from 'three';
+import { store } from '../core/state.js';
+import { wallFrame, pointInPolygon, polygonCentroid, polygonArea, largestInnerRect, areaText } from '../core/geometry.js';
+import { roomAt, projectBounds, openingCenter, nearestWall } from '../core/model.js';
+import { OPENING_MAP, CATALOG_MAP } from '../data/catalog.js';
+import { Mp4Muxer } from './mp4-mux.js';
+
+const S = 0.01;
+const EYE = 1.5; // 視線高度（公尺）
+const ease = (t) => t * t * (3 - 2 * t);
+const lerp = (a, b, t) => a + (b - a) * t;
+
+// 點到線段距離
+function segDist(px, py, ax, ay, bx, by) {
+  const dx = bx - ax, dy = by - ay;
+  const L = dx * dx + dy * dy || 1;
+  const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / L));
+  return Math.hypot(px - ax - dx * t, py - ay - dy * t);
+}
+function edgeDist(x, y, pts) {
+  let d = Infinity;
+  for (let i = 0; i < pts.length; i++) {
+    const [ax, ay] = pts[i], [bx, by] = pts[(i + 1) % pts.length];
+    d = Math.min(d, segDist(x, y, ax, ay, bx, by));
+  }
+  return d;
+}
+
+// 房間內可站立的點：離牆 40 公分以上，且不在高大家具（衣櫃、冰箱、書櫃等）範圍內
+function standPoints(room, P) {
+  const pts = room.points;
+  const xs = pts.map((p) => p[0]);
+  const ys = pts.map((p) => p[1]);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+  const tall = P.items.filter((it) => (it.h ?? CATALOG_MAP[it.kind]?.h ?? 0) + (it.elev || 0) > 130 && pointInPolygon(it.x, it.y, pts));
+  // 門片開啟的範圍（門中心半徑內）不站，避免鏡頭貼著打開的門
+  const doorZones = doorLinks(P).map((l) => ({ c: l.c, r: l.op.width + 15 }));
+  const nearDoor = (x, y) => doorZones.some((z) => Math.hypot(x - z.c[0], y - z.c[1]) < z.r);
+  const blocked = (x, y) => nearDoor(x, y) || tall.some((it) => {
+    const r = (-(it.rot || 0) * Math.PI) / 180;
+    const dx = x - it.x, dy = y - it.y;
+    const lx = dx * Math.cos(r) - dy * Math.sin(r), ly = dx * Math.sin(r) + dy * Math.cos(r);
+    return Math.abs(lx) < it.w / 2 + 25 && Math.abs(ly) < it.d / 2 + 25;
+  });
+  const step = Math.max(15, Math.min(40, Math.sqrt((x1 - x0) * (y1 - y0)) / 14));
+  const out = [];
+  for (let x = x0 + step / 2; x < x1; x += step) {
+    for (let y = y0 + step / 2; y < y1; y += step) {
+      if (!pointInPolygon(x, y, pts)) continue;
+      if (edgeDist(x, y, pts) < 40) continue;
+      if (blocked(x, y)) continue;
+      out.push([x, y]);
+    }
+  }
+  return out;
+}
+
+// 房間的焦點：重心在房內就用重心，否則用最大內接矩形中心（L 型房間）
+function roomFocus(room) {
+  const c = polygonCentroid(room.points);
+  if (pointInPolygon(c.x, c.y, room.points)) return [c.x, c.y];
+  const r = largestInnerRect(room.points);
+  return [(r.x0 + r.x1) / 2, (r.y0 + r.y1) / 2];
+}
+
+// 門的連通關係：每扇門兩側各是哪個房間，以及兩側的站點
+export function doorLinks(P = store.project) {
+  const links = [];
+  for (const op of P.openings) {
+    const def = OPENING_MAP[op.kind];
+    if (!def || def.cat !== 'door') continue;
+    const w = P.walls.find((x) => x.id === op.wallId);
+    if (!w) continue;
+    const c = openingCenter(op, w);
+    const f = wallFrame(w);
+    const off = (w.thickness || 12) / 2 + 45;
+    const pa = [c.x + f.nx * off, c.y + f.ny * off], pb = [c.x - f.nx * off, c.y - f.ny * off];
+    const ra = roomAt(P.rooms, pa[0], pa[1]), rb = roomAt(P.rooms, pb[0], pb[1]);
+    links.push({ op, def, c: [c.x, c.y], a: ra?.id || null, b: rb?.id || null, pa, pb });
+  }
+  return links;
+}
+
+// 沒有門、直接相連的房間（例如客餐廳與走道）：沿房間邊界找出沒有牆的一段，取中點當作通道
+export function openLinks(P = store.project, rooms = P.rooms) {
+  const links = [];
+  const wallNear = (x, y) => {
+    const n = nearestWall(P.walls, x, y, 60);
+    return n && n.d < (n.wall.thickness || 12) / 2 + 4;
+  };
+  for (let i = 0; i < rooms.length; i++) {
+    const A = rooms[i];
+    for (let j = 0; j < rooms.length; j++) {
+      if (i === j) continue;
+      const B = rooms[j];
+      let best = null;
+      const pts = A.points;
+      for (let k = 0; k < pts.length; k++) {
+        const [ax, ay] = pts[k], [bx, by] = pts[(k + 1) % pts.length];
+        const L = Math.hypot(bx - ax, by - ay);
+        if (L < 60) continue;
+        const ux = (bx - ax) / L, uy = (by - ay) / L;
+        let nx = -uy, ny = ux;
+        const mx = (ax + bx) / 2, my = (ay + by) / 2;
+        if (pointInPolygon(mx + nx * 10, my + ny * 10, pts)) { nx = -nx; ny = -ny; }
+        // 沿邊每 10 公分取樣，找出外側屬於 B 且沒有牆的最長一段
+        let run = null;
+        for (let t = 5; t <= L - 5; t += 10) {
+          const x = ax + ux * t, y = ay + uy * t;
+          const open = pointInPolygon(x + nx * 25, y + ny * 25, B.points) && !wallNear(x, y);
+          if (open) { run = run || { s: t, e: t }; run.e = t; } else run = null;
+          if (run && (!best || run.e - run.s > best.len)) best = { len: run.e - run.s, s: run.s, ax, ay, ux, uy, nx, ny };
+        }
+      }
+      if (!best || best.len < 50) continue;
+      const t = (best.s + best.s + best.len) / 2;
+      const c = [best.ax + best.ux * t, best.ay + best.uy * t];
+      const pa = [c[0] - best.nx * 45, c[1] - best.ny * 45], pb = [c[0] + best.nx * 45, c[1] + best.ny * 45];
+      if (!pointInPolygon(pa[0], pa[1], A.points) || !pointInPolygon(pb[0], pb[1], B.points)) continue;
+      if (i < j || !links.some((l) => l.a === B.id && l.b === A.id)) links.push({ op: null, def: null, c, a: A.id, b: B.id, pa, pb, open: true });
+    }
+  }
+  return links;
+}
+
+// 走訪順序：從玄關（大門所在房間）或客廳開始，優先穿過門走到相鄰、尚未去過的房間；
+// 走到盡頭時沿原路走回，穿過已去過的房間到最近的新房間（太遠才以淡出淡入切換）
+export function tourOrder(P = store.project) {
+  const rooms = P.rooms.filter((r) => r.points.length >= 3 && Math.abs(polygonArea(r.points)) > 1.2e4);
+  if (!rooms.length) return [];
+  const byId = new Map(rooms.map((r) => [r.id, r]));
+  const doors = doorLinks(P);
+  const links = [...doors.filter((l) => byId.has(l.a) && byId.has(l.b) && l.a !== l.b), ...openLinks(P, rooms)];
+  // 每個房間可去的鄰居：{ to, from: 本側站點, at: 對側站點, door }
+  const adj = new Map(rooms.map((r) => [r.id, []]));
+  for (const l of links) {
+    if (adj.get(l.a).some((x) => x.to === l.b)) continue;
+    adj.get(l.a).push({ to: l.b, from: l.pa, at: l.pb, door: l.op?.id || null });
+    adj.get(l.b).push({ to: l.a, from: l.pb, at: l.pa, door: l.op?.id || null });
+  }
+  const entry = doors.find((l) => l.def.entry && (byId.has(l.a) || byId.has(l.b)));
+  let start = entry && byId.get(byId.has(entry.a) ? entry.a : entry.b);
+  start = start || rooms.find((r) => /玄關/.test(r.name)) || rooms.find((r) => /客廳|起居/.test(r.name))
+    || rooms.reduce((a, b) => (Math.abs(polygonArea(b.points)) > Math.abs(polygonArea(a.points)) ? b : a));
+  // 客廳、餐廳等公共空間排前面，衛浴與儲藏室排後面
+  const rank = (r) => (/客|餐|起居|廚/.test(r.name) ? 0 : /主臥/.test(r.name) ? 1 : /臥|房|書/.test(r.name) ? 2 : /浴|廁|儲|陽台|工作/.test(r.name) ? 4 : 3);
+  const seq = [{ room: start, via: null }];
+  const seen = new Set([start.id]);
+  let cur = start;
+  while (seen.size < rooms.length) {
+    // 由目前房間找最近（經過最少通道）的新房間；同距離時依房間類型排序
+    const prev = new Map([[cur.id, null]]);
+    let frontier = [cur.id], target = null;
+    for (let depth = 0; frontier.length && !target; depth++) {
+      const next = [];
+      for (const id of frontier) for (const e of adj.get(id)) {
+        if (prev.has(e.to)) continue;
+        prev.set(e.to, { id, e });
+        next.push(e.to);
+      }
+      const fresh = next.filter((id) => !seen.has(id)).map((id) => byId.get(id)).sort((x, y) => rank(x) - rank(y));
+      if (fresh.length) target = fresh[0];
+      frontier = next.filter((id) => seen.has(id));
+    }
+    if (target) {
+      const hops = [];
+      for (let id = target.id; prev.get(id); id = prev.get(id).id) hops.unshift(prev.get(id).e);
+      // 最多穿過 4 個通道，再遠就直接切換
+      seq.push({ room: target, via: hops.length <= 4 ? hops.map((h) => ({ from: h.from, to: h.at, door: h.door })) : null });
+      seen.add(target.id); cur = target;
+      continue;
+    }
+    const pick = rooms.filter((r) => !seen.has(r.id)).sort((x, y) => rank(x) - rank(y))[0];
+    seq.push({ room: pick, via: null });
+    seen.add(pick.id); cur = pick;
+  }
+  return seq;
+}
+
+// 單一房間的運鏡：從離焦點最遠的角落（有入口時偏向入口那側）慢慢推近並橫移
+function roomShot(room, P, entryPt, pace) {
+  const focus = roomFocus(room);
+  const cand = standPoints(room, P);
+  if (!cand.length) cand.push(focus);
+  let best = cand[0], bestS = -Infinity;
+  for (const p of cand) {
+    const d = Math.hypot(p[0] - focus[0], p[1] - focus[1]);
+    const s = d - (entryPt ? 0.6 * Math.hypot(p[0] - entryPt[0], p[1] - entryPt[1]) : 0);
+    if (s > bestS) { bestS = s; best = p; }
+  }
+  const dx = focus[0] - best[0], dy = focus[1] - best[1];
+  const len = Math.hypot(dx, dy) || 1;
+  // 推近：最多 120 公分、不超過到焦點距離的 35%，且終點仍需可站立
+  let push = Math.min(120, len * 0.35);
+  const ok = (x, y) => pointInPolygon(x, y, room.points) && edgeDist(x, y, room.points) >= 35;
+  while (push > 0 && !ok(best[0] + (dx / len) * push, best[1] + (dy / len) * push)) push -= 15;
+  push = Math.max(0, push);
+  const end = [best[0] + (dx / len) * push, best[1] + (dy / len) * push];
+  // 橫移：視線焦點沿垂直方向由一側掃到另一側
+  const px = -dy / len, py = dx / len;
+  const sweep = Math.min(120, len * 0.3);
+  const area = Math.abs(polygonArea(room.points));
+  const dur = Math.min(7.5, 4.2 + area / 4e5) / pace;
+  const pos = (u) => { const e = ease(u); return v3(lerp(best[0], end[0], e), EYE, lerp(best[1], end[1], e)); };
+  const look = (u) => {
+    const e = ease(u);
+    return levelLook(pos(u), v3(focus[0] + px * sweep * (e - 0.5) * 2, EYE, focus[1] + py * sweep * (e - 0.5) * 2));
+  };
+  return { kind: 'room', room, dur, pos, look, start: best, end, caption: room.name, sub: areaText(area) };
+}
+
+function v3(x, y, z) { return new THREE.Vector3(x * S, y, z * S); }
+
+// 室內鏡頭維持接近水平的視線（略往下 4°），牆角與門框的垂直線才不會歪斜
+function levelLook(p, target) {
+  const d = target.clone().sub(p).setY(0);
+  if (d.lengthSq() < 1e-8) d.set(0, 0, -1);
+  d.normalize().multiplyScalar(3);
+  return p.clone().add(d).setY(p.y - 0.21);
+}
+
+const dirOf = (target, p) => target.clone().sub(p).setY(0).normalize();
+
+// 穿門轉場：沿曲線依序走過每個門口（或開放通道），視線看前方，頭尾與前後運鏡的視線平滑銜接
+function walkShot(fromShot, toShot, via, pace) {
+  const pts = [fromShot.pos(1)];
+  for (const h of via) pts.push(v3(h.from[0], EYE, h.from[1]), v3(h.to[0], EYE, h.to[1]));
+  pts.push(toShot.pos(0));
+  const curve = new THREE.CatmullRomCurve3(pts, false, 'centripetal');
+  const length = curve.getLength();
+  const dur = Math.max(2.2, length / 1.15) / pace;
+  const look0 = fromShot.look(1), look1 = toShot.look(0);
+  const pos = (u) => curve.getPointAt(ease(u));
+  const look = (u) => {
+    const e = ease(u);
+    const p = curve.getPointAt(e);
+    const ahead = curve.getPointAt(Math.min(1, e + 0.5 / Math.max(1, length))).sub(p);
+    ahead.y = 0;
+    if (ahead.lengthSq() < 1e-6) ahead.copy(look1).sub(p).setY(0);
+    const fwd = levelLook(p, p.clone().add(ahead));
+    // 開頭由前一個視線轉向前方，最後轉向下一個運鏡的視線（以時間計，長路線也一樣快）
+    const k0 = Math.min(0.4, 1.1 / dur), k1 = Math.min(0.4, 1.4 / dur);
+    // 以水平角度沿最短方向轉動
+    const mix = (a, b, k) => {
+      const da = dirOf(a, p), db = dirOf(b, p);
+      const t0 = Math.atan2(da.z, da.x);
+      let dt = Math.atan2(db.z, db.x) - t0;
+      dt = Math.atan2(Math.sin(dt), Math.cos(dt));
+      const ang = t0 + dt * k;
+      return levelLook(p, p.clone().add(new THREE.Vector3(Math.cos(ang), 0, Math.sin(ang))));
+    };
+    if (u < k0) return mix(look0, fwd, ease(u / k0));
+    if (u > 1 - k1) return mix(fwd, look1, ease((u - 1 + k1) / k1));
+    return fwd;
+  };
+  // 每扇門在走到前約 1.2 秒打開
+  const doors = [];
+  let acc = 0;
+  for (let i = 1; i < pts.length; i++) {
+    acc += pts[i].distanceTo(pts[i - 1]);
+    const h = via[Math.floor((i - 1) / 2)];
+    if (i % 2 === 1 && h?.door) doors.push({ id: h.door, u: Math.max(0, acc / length - 1.2 / dur) });
+  }
+  return { kind: 'walk', dur, pos, look, doors };
+}
+
+// 空拍：繞著整個平面轉動，開場時慢慢降低、結尾時慢慢拉高
+function aerialShot(P, aspect, dir, pace) {
+  const b = projectBounds(P);
+  const cx = ((b.x0 + b.x1) / 2) * S, cz = ((b.y0 + b.y1) / 2) * S;
+  const R = Math.max(b.x1 - b.x0, b.y1 - b.y0) * S;
+  const fov = THREE.MathUtils.degToRad(50);
+  const fit = (R * 0.62) / Math.tan(fov / 2) / Math.min(1, aspect * 0.9);
+  const dur = 5.5 / Math.sqrt(pace);
+  const a0 = dir > 0 ? 0.35 : 1.25, a1 = dir > 0 ? 1.15 : 2.05;
+  const pos = (u) => {
+    const e = ease(u);
+    const ang = lerp(a0, a1, e);
+    const k = dir > 0 ? lerp(1.12, 0.9, e) : lerp(0.92, 1.12, e);
+    const el = dir > 0 ? lerp(0.95, 0.78, e) : lerp(0.8, 0.98, e);
+    const d = fit * k;
+    return new THREE.Vector3(cx + Math.cos(ang) * Math.cos(el) * d, Math.sin(el) * d + 0.5, cz + Math.sin(ang) * Math.cos(el) * d);
+  };
+  const look = () => new THREE.Vector3(cx, 0.4, cz);
+  return { kind: 'aerial', dur, pos, look, fov: 50 };
+}
+
+// 規劃整支影片：回傳依序播放的運鏡清單與每段的開始時間
+export function planTour(P = store.project, { aspect = 16 / 9, pace = 1 } = {}) {
+  const order = tourOrder(P);
+  if (!order.length) return null;
+  const shots = [];
+  const totalArea = order.reduce((s, x) => s + Math.abs(polygonArea(x.room.points)), 0);
+  shots.push({ ...aerialShot(P, aspect, 1, pace), caption: P.name || '室內設計', sub: `${order.length} 個空間 · ${areaText(totalArea)}`, title: true, fadeOut: true });
+  let prev = null;
+  for (const step of order) {
+    const shot = roomShot(step.room, P, step.via?.at(-1).to, pace);
+    if (prev && step.via) shots.push(walkShot(prev, shot, step.via, pace));
+    else shot.fadeIn = true;
+    if (prev && !step.via) prev.fadeOut = true;
+    shots.push(shot);
+    prev = shot;
+  }
+  prev.fadeOut = true;
+  shots.push({ ...aerialShot(P, aspect, -1, pace), fadeIn: true, caption: P.name || '室內設計', sub: 'Interior Studio', title: true, outro: true });
+  let t = 0;
+  for (const s of shots) { s.t0 = t; t += s.dur; }
+  return { shots, duration: t, rooms: order.map((x) => x.room) };
+}
+
+// 支援的錄影格式：優先 MP4（iPhone、Windows 都能直接播放），否則 WebM
+export function pickMime() {
+  if (typeof MediaRecorder === 'undefined') return null;
+  const list = ['video/mp4;codecs=avc1.640028', 'video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
+  return list.find((m) => { try { return MediaRecorder.isTypeSupported(m); } catch { return false; } }) || null;
+}
+
+// 播放與錄製：接手 3D 檢視的相機與畫面，每個畫面合成字幕後錄進影片。
+// 有 WebCodecs 時逐格編碼（每格固定 1/30 秒，電腦慢只會做比較久，影片仍然流暢）；
+// 沒有時改用 MediaRecorder 即時錄影。
+const FPS = 30;
+export class TourPlayer {
+  constructor(view, { width = 1280, height = 720, pace = 1, captions = true, openDoors = true, record = true, encoder = null, onProgress, onDone } = {}) {
+    this.view = view;
+    this.W = width; this.H = height;
+    this.captions = captions;
+    this.openDoors = openDoors;
+    this.onProgress = onProgress;
+    this.onDone = onDone;
+    this.plan = planTour(store.project, { aspect: width / height, pace });
+    this.canvas = document.createElement('canvas');
+    this.canvas.width = width; this.canvas.height = height;
+    this.ctx = this.canvas.getContext('2d');
+    this.time = 0;
+    this.encoderConfig = record ? encoder : null;
+    this.record = record && (!!encoder || !!pickMime());
+    this.chunks = [];
+    this.frameNo = 0;
+    this.opened = new Set();
+  }
+
+  get ok() { return !!this.plan; }
+
+  start() {
+    const v = this.view;
+    // 保存目前狀態，結束後還原
+    this.saved = {
+      mode: v.mode, fov: v.camera.fov, pos: v.camera.position.clone(), quat: v.camera.quaternion.clone(),
+      target: v.controls.target.clone(), controls: v.controls.enabled, pr: v.renderer.getPixelRatio(),
+      doors: new Map([...(v.doorState || new Map())].map(([k, s]) => [k, { ...s }])),
+    };
+    v.live.cancel?.();
+    v.mode = 'tour';
+    v.controls.enabled = false;
+    v.selectionBox.visible = false;
+    v.needsSync = true;
+    v.renderer.setPixelRatio(1);
+    v.renderer.setSize(this.W, this.H, false);
+    v.camera.aspect = this.W / this.H;
+    v.tour = this;
+    if (this.encoderConfig) {
+      this.mime = 'video/mp4';
+      this.mux = new Mp4Muxer({ width: this.W, height: this.H, fps: FPS });
+      this.enc = new VideoEncoder({
+        output: (chunk, meta) => this.mux.add(chunk, meta),
+        error: (e) => { this.error = e; this.stop(false); },
+      });
+      this.enc.configure(this.encoderConfig);
+    } else if (this.record) {
+      this.mime = pickMime();
+      const stream = this.canvas.captureStream(FPS);
+      const bits = Math.round(this.W * this.H * FPS * 0.17);
+      this.rec = new MediaRecorder(stream, { mimeType: this.mime, videoBitsPerSecond: bits });
+      this.rec.ondataavailable = (e) => { if (e.data?.size) this.chunks.push(e.data); };
+      this.rec.onstop = () => this._finish();
+      this.rec.start(500);
+    }
+    this._onVis = () => {
+      if (!this.rec || this.rec.state === 'inactive') return;
+      if (document.hidden) this.rec.pause(); else this.rec.resume();
+    };
+    document.addEventListener('visibilitychange', this._onVis);
+  }
+
+  // 由 3D 檢視的動畫迴圈每個畫面呼叫
+  frame(dt) {
+    const v = this.view;
+    if (this.stopped) return;
+    if (this.enc) {
+      // 逐格編碼：編碼器忙不過來時先等一下
+      if (this.enc.encodeQueueSize > 3) return;
+      dt = 1 / FPS;
+      this.time = this.frameNo / FPS;
+    } else {
+      // 即時錄影：每個畫面最多推進 0.1 秒，電腦較慢時寧可放慢，也不要跳格
+      dt = Math.min(dt, 0.1);
+      this.time += dt;
+    }
+    const { shots, duration } = this.plan;
+    const t = Math.min(this.time, duration);
+    let i = shots.findIndex((s) => t < s.t0 + s.dur);
+    if (i < 0) i = shots.length - 1;
+    const s = shots[i];
+    const u = Math.min(1, (t - s.t0) / s.dur);
+    // 走向門口前先把門打開（前一段運鏡快結束時就開始開下一段的第一扇門）
+    if (this.openDoors) {
+      const want = [];
+      if (s.kind === 'walk') for (const d of s.doors) if (u >= d.u) want.push(d.id);
+      const nxt = shots[i + 1];
+      if (nxt?.kind === 'walk' && nxt.doors[0]?.u === 0 && s.t0 + s.dur - t < 1.2) want.push(nxt.doors[0].id);
+      for (const id of want) {
+        if (this.opened.has(id)) continue;
+        this.opened.add(id);
+        const st = v.doorState?.get(id);
+        if (v.doors?.has(id) && !(st && st.target)) v.toggleDoor(id);
+      }
+    }
+    if (v.needsSync) { v.needsSync = false; v.sync(); }
+    v.animateDoors(dt);
+    // 直式畫面左右較窄，室內鏡頭用較廣的視角
+    const fov = s.fov || (this.W < this.H ? 84 : this.W === this.H ? 74 : 68);
+    if (v.camera.fov !== fov || v.camera.aspect !== this.W / this.H) { v.camera.fov = fov; v.camera.aspect = this.W / this.H; v.camera.updateProjectionMatrix(); }
+    const p = s.pos(u), l = s.look(u);
+    v.camera.position.copy(p);
+    v.camera.lookAt(l);
+    v.camera.updateMatrixWorld();
+    v.renderer.render(v.scene, v.camera);
+    this.compose(s, u, t);
+    if (this.enc) {
+      const vf = new VideoFrame(this.canvas, { timestamp: Math.round((this.frameNo * 1e6) / FPS), duration: Math.round(1e6 / FPS) });
+      this.enc.encode(vf, { keyFrame: this.frameNo % (FPS * 2) === 0 });
+      vf.close();
+      this.frameNo++;
+    }
+    // 2D 平面圖同步顯示目前位置
+    if (s.kind !== 'aerial') {
+      const d = l.clone().sub(p);
+      v.app.onVisitor?.({ x: p.x / S, y: p.z / S, yaw: -Math.atan2(-d.x, -d.z) });
+    } else v.app.onVisitor?.(null);
+    this.onProgress?.(t / duration, s, t, duration);
+    if (this.time >= duration + (this.enc ? 0 : 0.4)) this.stop(true);
+  }
+
+  compose(s, u, t) {
+    const { ctx, W, H } = this;
+    ctx.drawImage(this.view.canvas, 0, 0, W, H);
+    // 淡入淡出（黑場）
+    const FADE = 0.45;
+    let fade = 0;
+    const tin = t - s.t0, tout = s.t0 + s.dur - t;
+    if (s.fadeIn && tin < FADE) fade = Math.max(fade, 1 - tin / FADE);
+    if (s.fadeOut && tout < FADE) fade = Math.max(fade, 1 - tout / FADE);
+    if (s.t0 === 0 && tin < 0.6) fade = Math.max(fade, 1 - tin / 0.6);
+    const unit = Math.min(W, H) / 720;
+    if (this.captions && s.caption) {
+      // 字幕：開頭 0.5 秒淡入、結尾 0.5 秒淡出
+      const a = Math.min(1, tin / 0.5, Math.max(0, (tout - 0.2) / 0.5));
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, a);
+      ctx.fillStyle = '#fff';
+      ctx.shadowColor = 'rgba(0,0,0,.55)'; ctx.shadowBlur = 14 * unit;
+      const font = '"Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif';
+      if (s.title) {
+        // 片頭、片尾：畫面中央大標題
+        const g = ctx.createLinearGradient(0, H * 0.3, 0, H * 0.7);
+        g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(0.5, 'rgba(0,0,0,.28)'); g.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.save(); ctx.shadowBlur = 0; ctx.fillStyle = g; ctx.fillRect(0, H * 0.3, W, H * 0.4); ctx.restore();
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.font = `700 ${Math.round(52 * unit)}px ${font}`;
+        ctx.fillText(s.caption, W / 2, H / 2 - 20 * unit, W * 0.9);
+        ctx.font = `400 ${Math.round(24 * unit)}px ${font}`;
+        ctx.fillText(s.sub || '', W / 2, H / 2 + 34 * unit, W * 0.9);
+      } else {
+        // 房間名稱：左下角
+        const x = 44 * unit, y = H - 52 * unit;
+        ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+        ctx.font = `700 ${Math.round(40 * unit)}px ${font}`;
+        ctx.fillText(s.caption, x, y - 30 * unit, W - x * 2);
+        ctx.font = `400 ${Math.round(22 * unit)}px ${font}`;
+        ctx.fillText(s.sub || '', x, y + 4 * unit, W - x * 2);
+        ctx.shadowBlur = 0;
+        ctx.fillRect(x, y - 82 * unit, 46 * unit, 4 * unit);
+      }
+      ctx.restore();
+    }
+    if (fade > 0) { ctx.fillStyle = `rgba(0,0,0,${Math.min(1, fade)})`; ctx.fillRect(0, 0, W, H); }
+  }
+
+  stop(done = false) {
+    if (this.stopped) return;
+    this.stopped = true;
+    this.completed = done;
+    document.removeEventListener('visibilitychange', this._onVis);
+    this.restore();
+    if (this.enc) {
+      const enc = this.enc;
+      const end = () => { try { enc.close(); } catch { /* 已關閉 */ } this._finish(); };
+      if (done && !this.error) enc.flush().then(end, (e) => { this.error = e; end(); });
+      else end();
+    } else if (this.rec && this.rec.state !== 'inactive') this.rec.stop();
+    else this._finish();
+  }
+
+  restore() {
+    const v = this.view, s = this.saved;
+    v.tour = null;
+    v.mode = s.mode;
+    v.controls.enabled = s.controls;
+    v.camera.fov = s.fov;
+    v.camera.position.copy(s.pos);
+    v.camera.quaternion.copy(s.quat);
+    v.controls.target.copy(s.target);
+    v.renderer.setPixelRatio(s.pr);
+    v.resize();
+    v.camera.updateProjectionMatrix();
+    // 門恢復成錄影前的開關狀態
+    for (const id of this.opened) {
+      const before = s.doors.get(id);
+      const st = v.doorState?.get(id);
+      if (st) { st.p = st.target = before ? before.target : 0; v.poseDoor(id); }
+    }
+    v.needsSync = true;
+    v.updateSelection();
+    v.app.onVisitor?.(null);
+    v.live.activity?.(true);
+  }
+
+  _finish() {
+    let blob = null;
+    if (this.mux) blob = this.completed && !this.error ? this.mux.finish() : null;
+    else if (this.chunks.length) blob = new Blob(this.chunks, { type: this.mime.split(';')[0] });
+    this.onDone?.({ blob, mime: this.mime, completed: this.completed && !this.error, error: this.error, duration: this.plan.duration });
+  }
+}
