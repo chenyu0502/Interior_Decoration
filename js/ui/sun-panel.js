@@ -53,19 +53,34 @@ export class SunPanel {
 
   build() {
     const el = this.el;
+    // 停靠在畫面區域底部：2D 與 3D 畫面自動縮短讓出空間，面板不會蓋住畫面
     el.innerHTML = `
-      <div class="sun-head"><b>◔ 日照模擬</b><button class="icon-btn" data-sun="close" title="關閉">✕</button></div>
-      <div class="sun-row"><label>地點</label><select id="sunCity">${Object.entries(CITIES).map(([k, c]) => `<option value="${k}">${c.name}</option>`).join('')}</select>
-        <label>座向</label><input type="range" id="sunNorth" min="0" max="359" step="1" title="正北方向：拖曳調整平面圖上哪一邊是北方"><span class="sun-compass" id="sunCompass" title="正北方向"><i>北</i></span></div>
-      <div class="sun-row"><label>日期</label><input type="date" id="sunDate"><span class="sun-chips">${SEASONS.map(([n, d]) => `<button type="button" data-season="${d || ''}">${n}</button>`).join('')}</span></div>
-      <div class="sun-row"><label>時間</label><input type="range" id="sunTime" min="300" max="1170" step="5"><b id="sunClock"></b><button type="button" class="btn small" id="sunPlay">播放</button></div>
-      <div class="sun-info" id="sunInfo"></div>
-      <div class="sun-report" id="sunReport"></div>
-      <p class="hint">2D 平面圖的黃色區域是此刻陽光照到的地板。只計算外牆上的窗戶，不含鄰棟與陽台等室外遮蔽。</p>`;
+      <div class="sun-bar">
+        <b class="sun-title">◔ 日照</b>
+        <span class="sun-field sun-more"><label>地點</label><select id="sunCity">${Object.entries(CITIES).map(([k, c]) => `<option value="${k}">${c.name}</option>`).join('')}</select></span>
+        <span class="sun-field sun-more sun-north"><label>座向</label><input type="range" id="sunNorth" min="0" max="359" step="1" title="正北方向：拖曳調整平面圖上哪一邊是北方"><span class="sun-compass" id="sunCompass" title="正北方向"><i>北</i></span></span>
+        <span class="sun-field sun-more"><label>日期</label><input type="date" id="sunDate"><span class="sun-chips">${SEASONS.map(([n, d]) => `<button type="button" data-season="${d || ''}">${n}</button>`).join('')}</span></span>
+        <span class="sun-tools">
+          <button type="button" class="btn small" data-sun="report" title="各房間一整天的日照時數與西曬時段">統計 ▴</button>
+          <button type="button" class="btn small" data-sun="collapse" title="收合成只有時間軸">收合</button>
+          <button type="button" class="icon-btn" data-sun="close" title="關閉日照模擬">✕</button>
+        </span>
+      </div>
+      <div class="sun-bar sun-time">
+        <label>時間</label><input type="range" id="sunTime" min="300" max="1170" step="5"><b id="sunClock"></b>
+        <button type="button" class="btn small" id="sunPlay">播放</button>
+        <span class="sun-info" id="sunInfo"></span>
+      </div>
+      <div class="sun-detail" id="sunDetail" hidden>
+        <div class="sun-report" id="sunReport"></div>
+        <p class="hint">2D 平面圖的黃色區域是此刻陽光照到的地板。只計算外牆上的窗戶，不含鄰棟與陽台等室外遮蔽。</p>
+      </div>`;
     el.addEventListener('click', (e) => {
       const b = e.target.closest('button');
       if (!b) return;
       if (b.dataset.sun === 'close') this.toggle(false);
+      else if (b.dataset.sun === 'report') this.setDetail(!this.detail);
+      else if (b.dataset.sun === 'collapse') this.setCollapsed(!this.collapsed);
       else if (b.dataset.season !== undefined) {
         this.date = b.dataset.season ? `${this.date.slice(0, 4)}-${b.dataset.season}` : todayStr();
         $('#sunDate').value = this.date;
@@ -80,6 +95,49 @@ export class SunPanel {
     $('#sunPlay').addEventListener('click', () => this.togglePlay());
   }
 
+  // 統計表展開 / 收起、整個面板收合成只剩時間軸（記在瀏覽器）
+  setDetail(on) {
+    this.detail = on;
+    if (on) this.setCollapsed(false, true);
+    $('#sunDetail').hidden = !on;
+    $('[data-sun="report"]', this.el).textContent = on ? '統計 ▾' : '統計 ▴';
+    this.savePrefs();
+  }
+
+  setCollapsed(on, quiet) {
+    this.collapsed = on;
+    this.el.classList.toggle('collapsed', on);
+    $('[data-sun="collapse"]', this.el).textContent = on ? '展開' : '收合';
+    if (on && this.detail) { this.detail = false; $('#sunDetail').hidden = true; $('[data-sun="report"]', this.el).textContent = '統計 ▴'; }
+    if (!quiet) this.savePrefs();
+  }
+
+  savePrefs() {
+    try { localStorage.setItem('interior-studio:sun-ui', JSON.stringify({ detail: this.detail, collapsed: this.collapsed })); } catch { /* 無痕模式 */ }
+  }
+
+  loadPrefs() {
+    let p = {};
+    try { p = JSON.parse(localStorage.getItem('interior-studio:sun-ui') || '{}'); } catch { /* 無痕模式 */ }
+    this.setCollapsed(!!p.collapsed, true);
+    this.setDetail(!!p.detail && !p.collapsed);
+  }
+
+  // 依面板高度讓畫面區域留出底部空間
+  dock(on) {
+    const views = $('#views');
+    if (!on) {
+      this.ro?.disconnect(); this.ro = null;
+      views.classList.remove('sun-open');
+      views.style.removeProperty('--sun-h');
+      return;
+    }
+    views.classList.add('sun-open');
+    const fit = () => views.style.setProperty('--sun-h', `${Math.ceil(this.el.offsetHeight)}px`);
+    fit();
+    if (!this.ro && typeof ResizeObserver !== 'undefined') { this.ro = new ResizeObserver(fit); this.ro.observe(this.el); }
+  }
+
   syncFromProject() {
     const c = this.cfg;
     $('#sunCity').value = c.city;
@@ -92,13 +150,21 @@ export class SunPanel {
     $('#sunBtn')?.classList.toggle('on', on);
     if (on) {
       if (store.project.settings.night) store.update((p) => { p.settings.night = false; }, 'settings');
+      this.loadPrefs();
+      this.dock(true);
       this.syncFromProject();
       $('#sunDate').value = this.date;
       $('#sunTime').value = this.minutes;
       this.app.plan.overlay = (ctx, lw) => this.drawPlan(ctx, lw);
       this.update();
       this.updateReport();
+      // 畫面縮短後重新取景，整間房子都在畫面內
+      requestAnimationFrame(() => {
+        this.app.plan.fit?.();
+        if (this.app.view3d.mode === 'orbit') this.app.view3d.resetView();
+      });
     } else {
+      this.dock(false);
       this.stopPlay();
       this.app.plan.overlay = null;
       this.app.plan.invalidate?.();
