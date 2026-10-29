@@ -41,6 +41,7 @@ const info = await page.evaluate(async ({ KINDS, style }) => {
   if (missing.length) return { missing };
   if (style) store.update((p) => { p.design.styleId = style; }, 'settings');
   window.app.setView('3d');
+  window.app.view3d.firstBuild = false; // 避免第一次載入時自動取景蓋掉截圖視角
   let x = 0;
   store.commit(() => { for (const k of KINDS) { const def = CATALOG_MAP[k]; x += def.w / 2 + 120; store.addItem(k, x, -700); x += def.w / 2; } }, 'add');
   await new Promise((r) => setTimeout(r, 1500));
@@ -60,6 +61,7 @@ const shoot = (kind, view) => page.evaluate(async ({ kind, view }) => {
   v.camera.position.set(x + (dir[0] / len) * dist, elev + it.h * S * 0.5 + (dir[1] / len) * dist, z + (dir[2] / len) * dist);
   v.controls.update();
   await new Promise((r) => setTimeout(r, 500));
+  v.renderer.render(v.scene, v.camera); // 確保截到的是新視角（畫面更新可能比等待時間慢）
   return v.canvas.toDataURL('image/png');
 }, { kind, view });
 

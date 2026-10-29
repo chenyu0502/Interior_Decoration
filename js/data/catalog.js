@@ -230,6 +230,13 @@ function planSofa(ctx, w, d, lw, pal) {
   const n = w > 180 ? 3 : w > 110 ? 2 : 1, cw = (w - 30) / n;
   for (let i = 0; i < n; i++) { rr(ctx, -w / 2 + 15 + i * cw + 1, -d / 2 + 21, cw - 2, d - 23, 4); fillStroke(ctx, tint(pal.fabric, 0.25), lw); }
 }
+function planChaise(ctx, w, d, lw, pal) {
+  const f = tint(pal.fabric, 0.45);
+  P.rect(ctx, w, d, lw, tint(pal.fabric, 0.2), 6);
+  rr(ctx, -w / 2, -d / 2, 18, d, 6); fillStroke(ctx, f, lw);
+  rr(ctx, -w / 2 + 18, -d / 2, w * 0.62 - 4, 14, 4); fillStroke(ctx, f, lw);
+  rr(ctx, -w / 2 + 20, -d / 2 + 18, 18, d - 26, 8); fillStroke(ctx, tint(pal.fabric2, 0.6), lw);
+}
 function planChair(ctx, w, d, lw, pal) {
   P.rect(ctx, w, d, lw, tint(pal.wood, 0.3), 3);
   rr(ctx, -w / 2, -d / 2, w, Math.min(8, d * 0.2), 2); fillStroke(ctx, tint(pal.fabric, 0.6), lw);
@@ -355,6 +362,35 @@ function buildArmchair(k, w, d, h) {
   k.box(w, h - legH, 16, 0, legH, -d / 2 + 8, fab, r + 2);
   k.box(12, 22 + seat - legH - 10, d, -w / 2 + 6, legH, 0, fab, r);
   k.box(12, 22 + seat - legH - 10, d, w / 2 - 6, legH, 0, fab, r);
+}
+
+// 貴妃椅：長座面，左端為捲邊高靠頭，靠背沿後側由頭端往腳端漸低、約佔六成長度；附圓柱抱枕
+function buildChaise(k, w, d, h) {
+  const p = k.pal;
+  const legH = p.legs === 'plinth' ? 6 : p.low ? 10 : 16;
+  const seatTop = p.low ? 38 : 44;
+  const fab = k.fabricMat();
+  const r = softR(p, 1.5);
+  const headT = 18, backT = 14;
+  k.legs(w - 12, d - 12, legH, 5);
+  // 底座與座墊
+  k.box(w, seatTop - legH - 12, d, 0, legH, 0, fab, r);
+  const sw = w - headT - 3;
+  k.box(sw, 12, d - backT - 2, headT / 2 + 1.5, seatTop - 12, backT / 2 + 1, fab, r + 2);
+  // 頭端：高扶手加上捲邊
+  const headH = h - legH - 10;
+  k.box(headT, headH, d, -w / 2 + headT / 2, legH, 0, fab, r);
+  const roll = k.cyl(11, 11, d, -w / 2 + headT / 2 - 2, 0, 0, fab, 28);
+  roll.rotation.x = Math.PI / 2;
+  roll.position.y = legH + headH - 1;
+  // 靠背：沿後側，頭端高、往腳端漸低
+  const bl = w * 0.62, bh = h - seatTop - 4;
+  const back = k.box(bl, bh, backT, -w / 2 + headT + bl / 2 - 4, seatTop - 14, -d / 2 + backT / 2, fab, r + 1);
+  back.rotation.z = -Math.atan2(bh * 0.45, bl);
+  // 圓柱抱枕
+  const pillow = k.cyl(9, 9, d - backT - 14, -w / 2 + headT + 10, 0, backT / 2 + 1, k.fabricMat(p.fabric2), 24);
+  pillow.rotation.x = Math.PI / 2;
+  pillow.position.y = seatTop + 8;
 }
 
 function buildTable(k, w, d, h, { top = 'wood', round = false, pedestal = false } = {}) {
@@ -984,6 +1020,7 @@ export const CATALOG = [
     build: (k, w, d, h) => buildSofa(k, w, d, h, { chaise: 1 }),
   },
   { id: 'sofa_curve', name: '圓弧沙發', cat: 'living', w: 230, d: 100, h: 74, roles: ['fabric', 'fabric2'], plan: (ctx, w, d, lw, pal) => { rr(ctx, -w / 2, -d / 2, w, d, 35); fillStroke(ctx, tint(pal.fabric, 0.45), lw); rr(ctx, -w / 2 + 20, -d / 2 + 26, w - 40, d - 30, 20); fillStroke(ctx, tint(pal.fabric, 0.2), lw); }, build: (k, w, d, h) => buildSofa(k, w, d, h, { curve: true }) },
+  { id: 'chaise', name: '貴妃椅', cat: 'living', w: 165, d: 72, h: 82, roles: ['fabric', 'fabric2'], plan: planChaise, build: buildChaise },
   { id: 'armchair', name: '單人沙發椅', cat: 'living', w: 80, d: 82, h: 78, roles: ['fabric', 'wood'], plan: planSofa, build: buildArmchair },
   { id: 'lounge_chair', name: '休閒躺椅', cat: 'living', w: 75, d: 90, h: 85, roles: ['fabric', 'wood'], plan: planChair, build: (k, w, d, h) => {
     const p = k.pal; const wm = k.woodMat();
