@@ -97,6 +97,7 @@ export class View3D {
   }
 
   resize() {
+    if (this.tour) return; // 錄影期間維持影片解析度
     const r = this.container.getBoundingClientRect();
     if (r.width < 2 || r.height < 2) return;
     this.renderer.setSize(r.width, r.height, false);
@@ -117,6 +118,12 @@ export class View3D {
       if (this.needsSync) { this.needsSync = false; this.sync(); this.renderer.shadowMap.needsUpdate = true; }
       this.vr.update(dt);
       this.renderer.render(this.scene, this.camera);
+      return;
+    }
+    // 導覽影片錄製中：由導覽接手相機並以固定解析度輸出
+    if (this.tour) {
+      if (this.live.covering || this.live.busy) this.live.cancel();
+      this.tour.frame(this.clock.getDelta());
       return;
     }
     if (!this.visible) return;
@@ -384,7 +391,7 @@ export class View3D {
       floor.userData = { roomId: r.id };
       this.structure.add(floor);
       // 日照模擬時一律加上天花板：天花板只有朝下的一面，從上方俯瞰仍看得到室內，但會擋住陽光
-      if ((P.settings.showCeiling && !P.settings.cutaway) || this.mode === 'walk' || this.mode === 'vr' || this.sunSim) {
+      if ((P.settings.showCeiling && !P.settings.cutaway) || this.mode === 'walk' || this.mode === 'vr' || this.mode === 'tour' || this.sunSim) {
         // 天花板朝下：形狀以 (x, y) 建立再轉 +90°，位置才會與地板重疊（地板用 (x, -y) 轉 -90°）
         const cg = new THREE.ShapeGeometry(new THREE.Shape(r.points.map(([x, y]) => new THREE.Vector2(x * S, y * S))));
         cg.rotateX(Math.PI / 2);
@@ -486,7 +493,7 @@ export class View3D {
   cutHeight() {
     const P = store.project;
     // 日照模擬時牆維持原高，陽光才會只從窗戶照入
-    return P.settings.cutaway && this.mode !== 'walk' && this.mode !== 'vr' && !this.sunSim ? 120 : 10000;
+    return P.settings.cutaway && this.mode !== 'walk' && this.mode !== 'vr' && this.mode !== 'tour' && !this.sunSim ? 120 : 10000;
   }
 
   resetView() {
