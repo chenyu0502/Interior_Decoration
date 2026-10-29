@@ -49,6 +49,11 @@ Interior Studio：純前端靜態網頁的室內設計工具（2D 平面圖、�
    - 版本號規則：新增功能升次版號，錯誤修正升修訂號。
 4. commit 後推送到開發分支。
 
+## 開發工具
+
+- `.claude/skills/blender/`：Blender skill，透過 MCP for Blender（`mcp-for-blender`）在使用者電腦上的 Blender 建模、渲染與匯出 .glb；設定方式與座標慣例見該 SKILL.md。
+- `.mcp.json`：專案層級的 MCP 伺服器設定（`blender`，安全模式開啟、遙測關閉）。只在使用者電腦上、Blender 開著時可用，雲端環境連不上屬正常。
+
 ## 自動合併 PR
 
 使用者同意：修改完成且測試通過後，直接開 PR 並合併到 `main`，不需要再詢問。流程：
