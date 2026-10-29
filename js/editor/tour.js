@@ -2,7 +2,7 @@
 // 每個房間以「角落推軌加橫移」運鏡，最後再拉回空拍收尾；錄成影片供下載與分享。
 import * as THREE from 'three';
 import { store } from '../core/state.js';
-import { wallFrame, pointInPolygon, polygonCentroid, polygonArea, largestInnerRect, areaText } from '../core/geometry.js';
+import { wallFrame, pointInPolygon, polygonCentroid, polygonArea, polygonBBox, largestInnerRect, areaText } from '../core/geometry.js';
 import { roomAt, projectBounds, openingCenter, nearestWall } from '../core/model.js';
 import { OPENING_MAP, CATALOG_MAP } from '../data/catalog.js';
 import { Mp4Muxer } from './mp4-mux.js';
@@ -125,40 +125,65 @@ export function openLinks(P = store.project, rooms = P.rooms) {
   return links;
 }
 
-// 走訪順序：從玄關（大門所在房間）或客廳開始，優先穿過門走到相鄰、尚未去過的房間；
-// 走到盡頭時沿原路走回，穿過已去過的房間到最近的新房間（太遠才以淡出淡入切換）
-export function tourOrder(P = store.project) {
+// 房間之間的通道圖：每個房間可去的鄰居 { to, from: 本側站點, at: 對側站點, door }
+function tourGraph(P) {
   const rooms = P.rooms.filter((r) => r.points.length >= 3 && Math.abs(polygonArea(r.points)) > 1.2e4);
-  if (!rooms.length) return [];
   const byId = new Map(rooms.map((r) => [r.id, r]));
   const doors = doorLinks(P);
   const links = [...doors.filter((l) => byId.has(l.a) && byId.has(l.b) && l.a !== l.b), ...openLinks(P, rooms)];
-  // 每個房間可去的鄰居：{ to, from: 本側站點, at: 對側站點, door }
   const adj = new Map(rooms.map((r) => [r.id, []]));
   for (const l of links) {
     if (adj.get(l.a).some((x) => x.to === l.b)) continue;
     adj.get(l.a).push({ to: l.b, from: l.pa, at: l.pb, door: l.op?.id || null });
     adj.get(l.b).push({ to: l.a, from: l.pb, at: l.pa, door: l.op?.id || null });
   }
+  return { rooms, byId, adj, doors };
+}
+
+// 兩個房間之間經過最少通道的路線（可穿過任何房間）；太遠或不相通回傳 null
+function routeBetween(g, fromId, toId, maxHops = 4) {
+  const prev = new Map([[fromId, null]]);
+  let frontier = [fromId];
+  while (frontier.length && !prev.has(toId)) {
+    const next = [];
+    for (const id of frontier) for (const e of g.adj.get(id) || []) {
+      if (prev.has(e.to)) continue;
+      prev.set(e.to, { id, e });
+      next.push(e.to);
+    }
+    frontier = next;
+  }
+  if (!prev.has(toId)) return null;
+  const hops = [];
+  for (let id = toId; prev.get(id); id = prev.get(id).id) hops.unshift(prev.get(id).e);
+  return hops.length && hops.length <= maxHops ? hops.map((h) => ({ from: h.from, to: h.at, door: h.door })) : null;
+}
+
+// 走道、走廊只穿過不停留（窄走道裡停下來只會拍到門）
+const isCorridor = (r) => /走道|走廊|過道|廊道/.test(r.name);
+
+// 預設走訪順序：從玄關（大門所在房間）或客廳開始，優先穿過門走到相鄰、尚未去過的房間；
+// 走到盡頭時沿原路走回，穿過已去過的房間到最近的新房間
+function defaultStops(g) {
+  const { rooms, byId, adj, doors } = g;
+  if (!rooms.length) return [];
   const entry = doors.find((l) => l.def.entry && (byId.has(l.a) || byId.has(l.b)));
   let start = entry && byId.get(byId.has(entry.a) ? entry.a : entry.b);
   start = start || rooms.find((r) => /玄關/.test(r.name)) || rooms.find((r) => /客廳|起居/.test(r.name))
     || rooms.reduce((a, b) => (Math.abs(polygonArea(b.points)) > Math.abs(polygonArea(a.points)) ? b : a));
   // 客廳、餐廳等公共空間排前面，衛浴與儲藏室排後面
   const rank = (r) => (/客|餐|起居|廚/.test(r.name) ? 0 : /主臥/.test(r.name) ? 1 : /臥|房|書/.test(r.name) ? 2 : /浴|廁|儲|陽台|工作/.test(r.name) ? 4 : 3);
-  // 走道、走廊只穿過不停留（窄走道裡停下來只會拍到門）；整間只有走道時仍照常拍
-  const pass = new Set(rooms.filter((r) => /走道|走廊|過道|廊道/.test(r.name)).map((r) => r.id));
+  const pass = new Set(rooms.filter(isCorridor).map((r) => r.id));
   if (pass.size === rooms.length) pass.clear();
   if (pass.has(start.id)) start = rooms.find((r) => !pass.has(r.id));
   const stops = rooms.filter((r) => !pass.has(r.id)).length;
-  const seq = [{ room: start, via: null }];
+  const seq = [start.id];
   const seen = new Set([start.id]);
   let cur = start;
   while (seen.size < stops) {
-    // 由目前房間找最近（經過最少通道）的新房間；同距離時依房間類型排序
     const prev = new Map([[cur.id, null]]);
     let frontier = [cur.id], target = null;
-    for (let depth = 0; frontier.length && !target; depth++) {
+    while (frontier.length && !target) {
       const next = [];
       for (const id of frontier) for (const e of adj.get(id)) {
         if (prev.has(e.to)) continue;
@@ -169,19 +194,204 @@ export function tourOrder(P = store.project) {
       if (fresh.length) target = fresh[0];
       frontier = next.filter((id) => seen.has(id) || pass.has(id));
     }
-    if (target) {
-      const hops = [];
-      for (let id = target.id; prev.get(id); id = prev.get(id).id) hops.unshift(prev.get(id).e);
-      // 最多穿過 4 個通道，再遠就直接切換
-      seq.push({ room: target, via: hops.length <= 4 ? hops.map((h) => ({ from: h.from, to: h.at, door: h.door })) : null });
-      seen.add(target.id); cur = target;
-      continue;
-    }
-    const pick = rooms.filter((r) => !seen.has(r.id) && !pass.has(r.id)).sort((x, y) => rank(x) - rank(y))[0];
-    seq.push({ room: pick, via: null });
-    seen.add(pick.id); cur = pick;
+    target = target || rooms.filter((r) => !seen.has(r.id) && !pass.has(r.id)).sort((x, y) => rank(x) - rank(y))[0];
+    seq.push(target.id);
+    seen.add(target.id); cur = target;
   }
   return seq;
+}
+
+// 走訪步驟（可編輯）：{ room, skip, note }。依專案中儲存的順序，新增的房間依預設順序補在後面；
+// 走道預設不停留。reset 為 true 時忽略儲存的設定。
+export function tourSteps(P = store.project, { reset = false } = {}) {
+  const g = tourGraph(P);
+  const order = defaultStops(g);
+  const def = [...order.map((id) => ({ room: id, skip: false, note: '' })),
+    ...g.rooms.filter((r) => !order.includes(r.id)).map((r) => ({ room: r.id, skip: true, note: '' }))];
+  const saved = reset ? [] : (P.settings.tour?.steps || []).filter((st) => g.byId.has(st.room));
+  const have = new Set(saved.map((st) => st.room));
+  return [...saved.map((st) => ({ room: st.room, skip: !!st.skip, note: String(st.note || '') })), ...def.filter((st) => !have.has(st.room))]
+    .map((st) => ({ ...st, name: g.byId.get(st.room).name }));
+}
+
+// 依步驟排出實際走訪：每一站與從上一站走過來的路線（太遠或不相通時 via 為 null，以淡出淡入切換）
+export function tourOrder(P = store.project, steps = tourSteps(P)) {
+  const g = tourGraph(P);
+  const seq = [];
+  for (const st of steps) {
+    if (st.skip || !g.byId.has(st.room)) continue;
+    const prev = seq.at(-1);
+    seq.push({ room: g.byId.get(st.room), note: st.note || '', via: prev ? routeBetween(g, prev.room.id, st.room) : null });
+  }
+  return seq;
+}
+
+// ---------------------------------------------------- 描述中提到的細節（特寫）
+// 最長共同子字串長度
+function lcs(a, b) {
+  let best = 0;
+  const dp = new Array(b.length + 1).fill(0);
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = b.length; j >= 1; j--) {
+      dp[j] = a[i - 1] === b[j - 1] ? dp[j - 1] + 1 : 0;
+      if (dp[j] > best) best = dp[j];
+    }
+  }
+  return best;
+}
+
+// 房間內可特寫的對象：家具、門窗、地板、天花板
+function detailCandidates(room, P) {
+  const out = [];
+  for (const it of P.items) {
+    if (!pointInPolygon(it.x, it.y, room.points)) continue;
+    const def = CATALOG_MAP[it.kind];
+    const name = it.name || def?.name || '家具';
+    out.push({ type: 'item', name, keys: [name, def?.name].filter(Boolean), it, size: Math.max(it.w, it.d) });
+  }
+  for (const op of P.openings) {
+    const def = OPENING_MAP[op.kind];
+    const w = P.walls.find((x) => x.id === op.wallId);
+    if (!def || !w) continue;
+    const c = openingCenter(op, w), f = wallFrame(w);
+    const off = (w.thickness || 12) / 2 + 30;
+    let n = null;
+    if (pointInPolygon(c.x + f.nx * off, c.y + f.ny * off, room.points)) n = [f.nx, f.ny];
+    else if (pointInPolygon(c.x - f.nx * off, c.y - f.ny * off, room.points)) n = [-f.nx, -f.ny];
+    if (!n) continue;
+    const win = def.cat === 'window';
+    out.push({ type: 'opening', name: def.name, keys: [def.name, ...(win ? ['窗戶', '窗景', '窗'] : ['門口', '門'])], op, def, c: [c.x, c.y], n, size: op.width || def.width });
+  }
+  out.push({ type: 'floor', name: '地板', keys: ['地板', '地磚', '地面', '磁磚', '木地板', '拼花'] });
+  out.push({ type: 'ceiling', name: '天花板', keys: ['天花板', '天花', '吊燈', '燈具', '燈光'] });
+  return out;
+}
+
+// 把描述拆成短句，逐句找出對應的特寫對象；找不到的句子以字幕顯示
+export function matchNote(room, note, P = store.project) {
+  const phrases = String(note || '').split(/[，,、；;。\n]+/).map((x) => x.trim()).filter(Boolean);
+  const cands = detailCandidates(room, P);
+  const used = new Set();
+  const details = [], texts = [];
+  // 「A 的 B」以 B 為主體：主體有對應才特寫；主體找不到時整句改用字幕，避免拍錯東西
+  const scoreOf = (text, c) => {
+    let sc = 0;
+    for (const k of c.keys) {
+      if (text.includes(k)) sc = Math.max(sc, k.length * 2 + 1);
+      else { const l = lcs(text, k); if (l >= 2) sc = Math.max(sc, l * 2); }
+    }
+    // 主體最後一個字是常見家具類別（桌、椅、櫃、床、燈、窗、門、鏡、畫）且名稱也有這個字
+    const last = text.at(-1);
+    if (!sc && '桌椅櫃床燈窗門鏡畫簾'.includes(last) && c.keys.some((k) => k.includes(last))) sc = 1;
+    return sc;
+  };
+  for (const ph of phrases) {
+    const k = ph.lastIndexOf('的');
+    const head = k >= 0 && k < ph.length - 1 ? ph.slice(k + 1) : ph;
+    let best = null, bestS = 0;
+    for (const c of cands) {
+      if (used.has(c)) continue;
+      const sc = scoreOf(head, c);
+      // 同分時選大的（例如兩扇窗選大的那扇）
+      if (sc > bestS || (sc === bestS && sc > 0 && (c.size || 0) > (best.size || 0))) { bestS = sc; best = c; }
+    }
+    if (best && details.length < 3) { used.add(best); details.push({ phrase: ph, target: best }); } else texts.push(ph);
+  }
+  return { details, texts };
+}
+
+// 特寫運鏡：站在對象正前方（找不到可站位置時轉向側面），慢慢推近並微微繞行
+function detailShot(room, d, P, pace) {
+  const t = d.target;
+  const inside = (x, y) => pointInPolygon(x, y, room.points) && edgeDist(x, y, room.points) >= 25;
+  let center, hc, front, size;
+  if (t.type === 'item') {
+    const it = t.it;
+    const r = ((it.rot || 0) * Math.PI) / 180;
+    center = [it.x, it.y];
+    hc = (it.elev || 0) + (it.h || 80) / 2;
+    front = [-Math.sin(r), Math.cos(r)];
+    size = Math.max(it.w, it.h || 80);
+  } else if (t.type === 'opening') {
+    center = t.c;
+    hc = (t.op.sill ?? t.def.sill ?? 0) + (t.op.height || t.def.height) / 2;
+    front = t.n;
+    size = Math.max(t.size, t.op.height || t.def.height);
+  } else {
+    const f = roomFocus(room);
+    const cand = standPoints(room, P);
+    const p = cand.sort((a, b) => Math.hypot(a[0] - f[0], a[1] - f[1]) - Math.hypot(b[0] - f[0], b[1] - f[1]))[0] || f;
+    const dx = f[0] - p[0], dy = f[1] - p[1];
+    const L = Math.hypot(dx, dy) || 1;
+    const dir = L > 30 ? [dx / L, dy / L] : [1, 0];
+    const up = t.type === 'ceiling';
+    const eye = up ? 1.35 : 1.45;
+    const dur = (3.6 + Math.max(0, d.phrase.length - 10) * 0.08) / pace;
+    const pos = (u) => { const e = ease(u); return v3(p[0] + dir[0] * 40 * e, eye, p[1] + dir[1] * 40 * e); };
+    const look = (u) => {
+      const q = pos(u);
+      const ahead = new THREE.Vector3(dir[0], 0, dir[1]).multiplyScalar(up ? 1.2 : 1.1);
+      return q.clone().add(ahead).setY(up ? P.settings.wallHeight * S : 0.05);
+    };
+    return { kind: 'detail', room, dur, pos, look, fovMul: 0.9, caption: d.phrase, sub: `${room.name} · ${t.name}` };
+  }
+  const base = Math.atan2(front[1], front[0]);
+  let cam = null, dist = 0;
+  // 先試正前方，再試左右偏 35°、70°，距離由遠到近
+  for (const da of [0, 0.6, -0.6, 1.2, -1.2]) {
+    for (const k of [1, 0.8, 0.62]) {
+      const dd = Math.min(300, Math.max(110, size * 1.15 + 70)) * k;
+      const a = base + da;
+      const x = center[0] + Math.cos(a) * dd, y = center[1] + Math.sin(a) * dd;
+      if (inside(x, y)) { cam = { a, dd }; dist = dd; break; }
+    }
+    if (cam) break;
+  }
+  if (!cam) {
+    // 小空間：在房內找離對象最接近理想距離、且不在對象範圍內的位置
+    const ideal = Math.min(220, Math.max(90, size * 0.9 + 50));
+    const bb = polygonBBox(room.points);
+    let bestD = Infinity;
+    for (let x = bb.x0 + 10; x < bb.x1; x += 10) {
+      for (let y = bb.y0 + 10; y < bb.y1; y += 10) {
+        if (!pointInPolygon(x, y, room.points) || edgeDist(x, y, room.points) < 20) continue;
+        const dd = Math.hypot(x - center[0], y - center[1]);
+        if (dd < 55) continue;
+        const sc = Math.abs(dd - ideal);
+        if (sc < bestD) { bestD = sc; cam = { a: Math.atan2(y - center[1], x - center[0]), dd }; dist = dd; }
+      }
+    }
+    if (!cam) return null;
+  }
+  const eye = Math.min(1.6, Math.max(0.95, hc * S + 0.35));
+  const target = v3(center[0], hc * S, center[1]);
+  // 繞行 ±6° 只在兩端都可站時才做
+  const arc = inside(center[0] + Math.cos(cam.a + 0.1) * dist * 1.08, center[1] + Math.sin(cam.a + 0.1) * dist * 1.08)
+    && inside(center[0] + Math.cos(cam.a - 0.1) * dist * 0.86, center[1] + Math.sin(cam.a - 0.1) * dist * 0.86) ? 0.1 : 0;
+  const pos = (u) => {
+    const e = ease(u);
+    const a = cam.a + arc * (1 - 2 * e);
+    const dd = dist * lerp(arc ? 1.08 : 1, 0.86, e);
+    const p = v3(center[0] + Math.cos(a) * dd, eye, center[1] + Math.sin(a) * dd);
+    if (!inside(p.x / S, p.z / S)) return v3(center[0] + Math.cos(cam.a) * dist, eye, center[1] + Math.sin(cam.a) * dist);
+    return p;
+  };
+  const look = () => target.clone();
+  const dur = (3.6 + Math.max(0, d.phrase.length - 10) * 0.08) / pace;
+  return { kind: 'detail', room, dur, pos, look, fovMul: 0.85, caption: d.phrase, sub: `${room.name} · ${t.name}` };
+}
+
+// 房間內移動到下一個特寫：位置與視線一起平滑移動
+function moveShot(a, b, pace) {
+  const p0 = a.pos(1), p1 = b.pos(0), l0 = a.look(1), l1 = b.look(0);
+  const dur = Math.max(1.4, p0.distanceTo(p1) / 0.8) / pace;
+  const m0 = a.fovMul || 1, m1 = b.fovMul || 1;
+  return {
+    kind: 'move', dur,
+    pos: (u) => p0.clone().lerp(p1, ease(u)),
+    look: (u) => l0.clone().lerp(l1, ease(u)),
+    fov: (u, base) => base * lerp(m0, m1, ease(u)),
+  };
 }
 
 // 單一房間的運鏡：從離焦點最遠的角落（有入口時偏向入口那側）慢慢推近並橫移
@@ -271,7 +481,9 @@ function walkShot(fromShot, toShot, via, pace) {
     const h = via[Math.floor((i - 1) / 2)];
     if (i % 2 === 1 && h?.door) doors.push({ id: h.door, u: Math.max(0, acc / length - 1.2 / dur) });
   }
-  return { kind: 'walk', dur, pos, look, doors };
+  const m0 = fromShot.fovMul || 1, m1 = toShot.fovMul || 1;
+  const fov = (u, base) => base * lerp(m0, m1, ease(Math.min(1, u * 2.5)));
+  return { kind: 'walk', dur, pos, look, doors, fov };
 }
 
 // 空拍：繞著整個平面轉動，開場時慢慢降低、結尾時慢慢拉高
@@ -295,9 +507,9 @@ function aerialShot(P, aspect, dir, pace) {
   return { kind: 'aerial', dur, pos, look, fov: 50 };
 }
 
-// 規劃整支影片：回傳依序播放的運鏡清單與每段的開始時間
-export function planTour(P = store.project, { aspect = 16 / 9, pace = 1 } = {}) {
-  const order = tourOrder(P);
+// 規劃整支影片：回傳依序播放的運鏡清單與每段的開始時間。steps 為可編輯的走訪步驟（省略時用專案設定）
+export function planTour(P = store.project, { aspect = 16 / 9, pace = 1, steps } = {}) {
+  const order = tourOrder(P, steps || tourSteps(P));
   if (!order.length) return null;
   const shots = [];
   const totalArea = order.reduce((s, x) => s + Math.abs(polygonArea(x.room.points)), 0);
@@ -305,17 +517,47 @@ export function planTour(P = store.project, { aspect = 16 / 9, pace = 1 } = {}) 
   let prev = null;
   for (const step of order) {
     const shot = roomShot(step.room, P, step.via?.at(-1).to, pace);
+    // 描述：提到的家具、門窗、地板或天花板加拍特寫；找不到對象的句子顯示在房間字幕下方
+    const { details, texts } = matchNote(step.room, step.note, P);
+    step.shotDetails = []; step.shotTexts = [...texts];
+    if (texts.length) { shot.note = texts.join('，'); shot.dur += Math.min(3, 0.8 + shot.note.length * 0.06) / pace; }
     if (prev && step.via) shots.push(walkShot(prev, shot, step.via, pace));
     else shot.fadeIn = true;
     if (prev && !step.via) prev.fadeOut = true;
     shots.push(shot);
     prev = shot;
+    for (const d of details) {
+      const ds = detailShot(step.room, d, P, pace);
+      if (!ds) { shot.note = [shot.note, d.phrase].filter(Boolean).join('，'); step.shotTexts.push(d.phrase); continue; }
+      step.shotDetails.push(d.target.name);
+      shots.push(moveShot(prev, ds, pace), ds);
+      prev = ds;
+    }
   }
   prev.fadeOut = true;
   shots.push({ ...aerialShot(P, aspect, -1, pace), fadeIn: true, caption: P.name || '室內設計', sub: 'Interior Studio', title: true, outro: true });
   let t = 0;
   for (const s of shots) { s.t0 = t; t += s.dur; }
-  return { shots, duration: t, rooms: order.map((x) => x.room) };
+  return { shots, duration: t, rooms: order.map((x) => x.room), order };
+}
+
+// 依寬度換行（中文逐字、英文以空白斷開），超過行數以「…」結尾
+function wrapLines(ctx, text, maxW, maxLines) {
+  const tokens = String(text).match(/[A-Za-z0-9.,'-]+\s*|\s+|./gu) || [];
+  const lines = [];
+  let cur = '';
+  for (const tk of tokens) {
+    if (ctx.measureText(cur + tk).width > maxW && cur) { lines.push(cur.trimEnd()); cur = tk.trimStart(); } else cur += tk;
+  }
+  if (cur) lines.push(cur);
+  if (lines.length > maxLines) {
+    const out = lines.slice(0, maxLines);
+    let last = out[maxLines - 1];
+    while (last && ctx.measureText(`${last}…`).width > maxW) last = last.slice(0, -1);
+    out[maxLines - 1] = `${last}…`;
+    return out;
+  }
+  return lines;
 }
 
 // 支援的錄影格式：優先 MP4（iPhone、Windows 都能直接播放），否則 WebM
@@ -428,8 +670,9 @@ export class TourPlayer {
     if (v.needsSync) { v.needsSync = false; v.sync(); }
     v.animateDoors(dt);
     // 直式畫面左右較窄，室內鏡頭用較廣的視角
-    const fov = s.fov || (this.W < this.H ? 84 : this.W === this.H ? 74 : 68);
-    if (v.camera.fov !== fov || v.camera.aspect !== this.W / this.H) { v.camera.fov = fov; v.camera.aspect = this.W / this.H; v.camera.updateProjectionMatrix(); }
+    const baseFov = this.W < this.H ? 84 : this.W === this.H ? 74 : 68;
+    const fov = typeof s.fov === 'function' ? s.fov(u, baseFov) : s.fov || baseFov * (s.fovMul || 1);
+    if (Math.abs(v.camera.fov - fov) > 1e-4 || v.camera.aspect !== this.W / this.H) { v.camera.fov = fov; v.camera.aspect = this.W / this.H; v.camera.updateProjectionMatrix(); }
     const p = s.pos(u), l = s.look(u);
     v.camera.position.copy(p);
     v.camera.lookAt(l);
@@ -481,15 +724,24 @@ export class TourPlayer {
         ctx.font = `400 ${Math.round(24 * unit)}px ${font}`;
         ctx.fillText(s.sub || '', W / 2, H / 2 + 34 * unit, W * 0.9);
       } else {
-        // 房間名稱：左下角
-        const x = 44 * unit, y = H - 52 * unit;
+        // 左下角：房間名稱與坪數；特寫時為描述文字。過長的文字自動換行
+        const x = 44 * unit, maxW = W - x * 2;
         ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
-        ctx.font = `700 ${Math.round(40 * unit)}px ${font}`;
-        ctx.fillText(s.caption, x, y - 30 * unit, W - x * 2);
+        const big = s.kind === 'detail' ? 32 : 40;
+        ctx.font = `700 ${Math.round(big * unit)}px ${font}`;
+        const head = wrapLines(ctx, s.caption, maxW, s.kind === 'detail' ? 3 : 1);
         ctx.font = `400 ${Math.round(22 * unit)}px ${font}`;
-        ctx.fillText(s.sub || '', x, y + 4 * unit, W - x * 2);
+        const tail = [s.sub || '', ...(s.note ? wrapLines(ctx, s.note, maxW, 2) : [])].filter(Boolean);
+        const lh = big * 1.25 * unit, sh = 22 * 1.45 * unit;
+        let y = H - 40 * unit - tail.length * sh - (head.length - 1) * lh;
         ctx.shadowBlur = 0;
-        ctx.fillRect(x, y - 82 * unit, 46 * unit, 4 * unit);
+        ctx.fillRect(x, y - big * unit - 16 * unit, 46 * unit, 4 * unit);
+        ctx.shadowBlur = 14 * unit;
+        ctx.font = `700 ${Math.round(big * unit)}px ${font}`;
+        for (const line of head) { ctx.fillText(line, x, y); y += lh; }
+        y += sh - lh + 6 * unit;
+        ctx.font = `400 ${Math.round(22 * unit)}px ${font}`;
+        for (const line of tail) { ctx.fillText(line, x, y); y += sh; }
       }
       ctx.restore();
     }

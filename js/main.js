@@ -18,7 +18,7 @@ import { VERSION, CHANGELOG, compareVersions } from './version.js';
 import { Updater } from './core/updater.js';
 import { mountPano, panoViewerHTML } from './editor/pano-viewer.js';
 import { vrSupported } from './editor/vr.js';
-import { TourPlayer, planTour, pickMime } from './editor/tour.js';
+import { TourPlayer, planTour, pickMime, tourSteps } from './editor/tour.js';
 import { pickEncoder } from './editor/mp4-mux.js';
 import { RenderStudio, RENDER_TIMES, RENDER_QUALITY, RENDER_ASPECTS, RENDER_ENGINES, RENDER_TONES } from './editor/render.js';
 import { analyzeFloorplan, buildProject, estimateScale, loadImageData } from './ai/floorplan-import.js';
@@ -1196,7 +1196,7 @@ class App {
   openTour() {
     if (this.view3d.vr.active) { toast('請先離開 VR 再錄製導覽影片'); return; }
     if (this.studio?.running) { toast('寫實渲染進行中，請等渲染完成再錄製'); return; }
-    if (!planTour(store.project)) { toast('平面圖中還沒有房間，請先畫出房間（或載入範例）'); return; }
+    if (!tourSteps(store.project).length) { toast('平面圖中還沒有房間，請先畫出房間（或載入範例）'); return; }
     const m = $('#tourModal');
     if (!this.tourBound) {
       this.tourBound = true;
@@ -1209,7 +1209,8 @@ class App {
         else if (a === 'download' && this.tourVideo) download(this.tourVideo.url, this.tourVideo.name);
         else if (a === 'share' && this.tourVideo) this.shareTour();
       });
-      for (const id of ['#tAspect', '#tPace']) $(id).addEventListener('change', () => this.tourRoute());
+      for (const id of ['#tAspect', '#tPace']) $(id).addEventListener('change', () => this.tourSummary());
+      this.bindTourRoute();
     }
     if (!pickMime()) $('#tourStatus').textContent = '此瀏覽器不支援錄影，只能預覽運鏡；請改用 Chrome、Edge 或 Safari';
     m.hidden = false;
@@ -1224,13 +1225,80 @@ class App {
     return a >= b ? { width: even((q * a) / b), height: q } : { width: q, height: even((q * b) / a) };
   }
 
-  // 顯示走訪順序與預估長度
-  tourRoute() {
+  // 走訪順序（可編輯）：調整順序、選擇是否停留拍攝、每一站填寫要特別注意的細節
+  tourRoute(reset = false) {
+    this.tourList = tourSteps(store.project, { reset });
+    $('#tourRoute').innerHTML = `
+      <div class="tr-top"><span id="tourLen">走訪順序</span><button type="button" class="btn small" data-tr="reset" title="恢復自動排列的順序並清除所有描述">重設</button></div>
+      <ol class="tr-list">${this.tourList.map((st, i) => `
+        <li data-i="${i}" class="${st.skip ? 'skip' : ''}">
+          <div class="tr-head">
+            <label class="check"><input type="checkbox" data-tr="use" ${st.skip ? '' : 'checked'}> <b>${esc(st.name)}</b></label>
+            <span class="tr-move"><button type="button" class="icon-btn" data-tr="up" title="往前移" ${i ? '' : 'disabled'}>↑</button><button type="button" class="icon-btn" data-tr="down" title="往後移" ${i < this.tourList.length - 1 ? '' : 'disabled'}>↓</button></span>
+          </div>
+          <textarea rows="1" data-tr="note" placeholder="特別注意的細節（選填），例：窗邊的貴妃椅" ${st.skip ? 'hidden' : ''}>${esc(st.note)}</textarea>
+          <div class="tr-hint"></div>
+        </li>`).join('')}</ol>`;
+    this.tourSummary();
+  }
+
+  bindTourRoute() {
+    const box = $('#tourRoute');
+    const idx = (el) => Number(el.closest('li')?.dataset.i);
+    box.addEventListener('click', (e) => {
+      const b = e.target.closest('button[data-tr]');
+      if (!b) return;
+      if (b.dataset.tr === 'reset') { store.update((p) => { delete p.settings.tour; }, 'tour'); this.tourRoute(true); return; }
+      const i = idx(b), j = i + (b.dataset.tr === 'up' ? -1 : 1);
+      const L = this.tourList;
+      if (j < 0 || j >= L.length) return;
+      [L[i], L[j]] = [L[j], L[i]];
+      this.saveTourSteps(true);
+      this.tourRoute();
+      box.querySelector(`li[data-i="${j}"] [data-tr="${b.dataset.tr}"]`)?.focus();
+    });
+    box.addEventListener('change', (e) => {
+      if (e.target.dataset.tr !== 'use') return;
+      const li = e.target.closest('li');
+      this.tourList[idx(e.target)].skip = !e.target.checked;
+      li.classList.toggle('skip', !e.target.checked);
+      li.querySelector('textarea').hidden = !e.target.checked;
+      this.saveTourSteps(true);
+      this.tourSummary();
+    });
+    box.addEventListener('input', (e) => {
+      if (e.target.dataset.tr !== 'note') return;
+      this.tourList[idx(e.target)].note = e.target.value;
+      // 輸入時延遲存檔與重算，避免每個字都重建
+      clearTimeout(this.tourNoteT);
+      this.tourNoteT = setTimeout(() => { this.saveTourSteps(); this.tourSummary(); }, 350);
+    });
+  }
+
+  saveTourSteps() {
+    const steps = this.tourList.map(({ room, skip, note }) => ({ room, skip, note }));
+    store.update((p) => { p.settings.tour = { steps }; }, 'tour');
+  }
+
+  // 預估長度、每一站會怎麼拍（特寫哪些對象、哪些文字以字幕顯示、是否淡出切換）
+  tourSummary() {
+    if (!this.tourList) return;
     const { width, height } = this.tourSize();
-    const plan = planTour(store.project, { aspect: width / height, pace: Number($('#tPace').value) });
-    if (!plan) return;
-    const walks = new Set(plan.shots.filter((s) => s.kind === 'walk').map((s) => plan.shots[plan.shots.indexOf(s) + 1]?.room?.id));
-    $('#tourRoute').innerHTML = `走訪順序（約 ${Math.round(plan.duration)} 秒）<ol>${plan.rooms.map((r, i) => `<li>${esc(r.name)}${i && !walks.has(r.id) ? ' <span>（淡出切換）</span>' : ''}</li>`).join('')}</ol>`;
+    const plan = planTour(store.project, { aspect: width / height, pace: Number($('#tPace').value), steps: this.tourList });
+    $('#tourLen').textContent = plan ? `走訪順序（約 ${Math.round(plan.duration)} 秒）` : '走訪順序（請至少勾選一個空間）';
+    const stops = new Map((plan?.order || []).map((o, k) => [o.room.id, { ...o, first: k === 0 }]));
+    for (const li of $('#tourRoute').querySelectorAll('li[data-i]')) {
+      const st = this.tourList[Number(li.dataset.i)];
+      const o = stops.get(st.room);
+      const hint = li.querySelector('.tr-hint');
+      if (!o) { hint.textContent = '不停留（需要時只會穿過）'; continue; }
+      const parts = [];
+      if (!o.first && !o.via) parts.push('從上一站淡出切換');
+      if (o.shotDetails.length) parts.push(`特寫：${o.shotDetails.join('、')}`);
+      if (o.shotTexts.length) parts.push(`字幕：${o.shotTexts.join('，')}`);
+      if (!st.note.trim()) parts.push('照原設計運鏡');
+      hint.textContent = parts.join(' · ');
+    }
   }
 
   tourButtons(running) {
@@ -1241,7 +1309,8 @@ class App {
     const share = m.querySelector('[data-tour="share"]');
     share.hidden = !this.tourVideo?.file || !navigator.canShare?.({ files: [this.tourVideo.file] });
     share.disabled = running;
-    for (const el of m.querySelectorAll('.render-opts select, .render-opts input')) el.disabled = running;
+    for (const el of m.querySelectorAll('.render-opts select, .render-opts input, .render-opts textarea, .tour-route button')) el.disabled = running;
+    if (!running) this.tourRoute();
   }
 
   async startTour() {
@@ -1287,7 +1356,7 @@ class App {
         this.tourButtons(false);
       },
     });
-    if (!player.ok) { toast('平面圖中還沒有房間'); return; }
+    if (!player.ok) { toast('請在走訪順序中至少勾選一個要拍攝的空間'); return; }
     this.tour = player;
     $('#tourBarWrap').classList.remove('done');
     host.replaceChildren(player.canvas);
