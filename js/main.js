@@ -18,7 +18,7 @@ import { VERSION, CHANGELOG, compareVersions } from './version.js';
 import { Updater } from './core/updater.js';
 import { mountPano, panoViewerHTML } from './editor/pano-viewer.js';
 import { vrSupported } from './editor/vr.js';
-import { TourPlayer, planTour, pickMime, tourSteps } from './editor/tour.js';
+import { TourPlayer, planTour, pickMime, tourSteps, viewTargets, previewStop } from './editor/tour.js';
 import { pickEncoder } from './editor/mp4-mux.js';
 import { RenderStudio, RENDER_TIMES, RENDER_QUALITY, RENDER_ASPECTS, RENDER_ENGINES, RENDER_TONES } from './editor/render.js';
 import { analyzeFloorplan, buildProject, estimateScale, loadImageData } from './ai/floorplan-import.js';
@@ -1225,50 +1225,115 @@ class App {
     return a >= b ? { width: even((q * a) / b), height: q } : { width: q, height: even((q * b) / a) };
   }
 
-  // 走訪順序（可編輯）：調整順序、選擇是否停留拍攝、每一站填寫要特別注意的細節
+  // 走訪順序（可編輯）：調整順序、略過、新增站點；每一站可設定視角（自動 / 朝向家具門窗 / 擷取 3D 視角）、
+  // 左右轉向、停留時間、字幕名稱與要特別注意的細節，並可預覽該站畫面
   tourRoute(reset = false) {
     this.tourList = tourSteps(store.project, { reset });
+    const rooms = store.project.rooms.filter((r) => this.tourList.some((st) => st.room === r.id));
+    const count = (room) => this.tourList.filter((st) => st.room === room).length;
+    const L = this.tourList;
     $('#tourRoute').innerHTML = `
-      <div class="tr-top"><span id="tourLen">走訪順序</span><button type="button" class="btn small" data-tr="reset" title="恢復自動排列的順序並清除所有描述">重設</button></div>
-      <ol class="tr-list">${this.tourList.map((st, i) => `
+      <div class="tr-top"><span id="tourLen">走訪順序</span><button type="button" class="btn small" data-tr="reset" title="恢復自動排列的順序，並清除新增的站點、視角與描述">重設</button></div>
+      <ol class="tr-list">${L.map((st, i) => {
+        const room = store.project.rooms.find((r) => r.id === st.room);
+        const targets = room ? viewTargets(room) : [];
+        const v = st.view;
+        const opt = (val, label) => `<option value="${esc(val)}" ${(v.mode === 'face' ? `face:${v.target}` : v.mode) === val ? 'selected' : ''}>${esc(label)}</option>`;
+        return `
         <li data-i="${i}" class="${st.skip ? 'skip' : ''}">
           <div class="tr-head">
-            <label class="check"><input type="checkbox" data-tr="use" ${st.skip ? '' : 'checked'}> <b>${esc(st.name)}</b></label>
-            <span class="tr-move"><button type="button" class="icon-btn" data-tr="up" title="往前移" ${i ? '' : 'disabled'}>↑</button><button type="button" class="icon-btn" data-tr="down" title="往後移" ${i < this.tourList.length - 1 ? '' : 'disabled'}>↓</button></span>
+            <label class="check"><input type="checkbox" data-tr="use" ${st.skip ? '' : 'checked'}> <b>${esc(st.title || st.name)}</b>${st.title ? ` <small>${esc(st.name)}</small>` : ''}</label>
+            <span class="tr-move">
+              <button type="button" class="icon-btn" data-tr="up" title="往前移" ${i ? '' : 'disabled'}>↑</button>
+              <button type="button" class="icon-btn" data-tr="down" title="往後移" ${i < L.length - 1 ? '' : 'disabled'}>↓</button>
+              ${count(st.room) > 1 ? '<button type="button" class="icon-btn" data-tr="del" title="刪除這一站">✕</button>' : ''}
+            </span>
           </div>
-          <textarea rows="1" data-tr="note" placeholder="特別注意的細節（選填），例：窗邊的貴妃椅" ${st.skip ? 'hidden' : ''}>${esc(st.note)}</textarea>
+          <div class="tr-body" ${st.skip ? 'hidden' : ''}>
+            <div class="tr-row"><label>視角</label><select data-tr="mode">${opt('auto', '自動')}${targets.map((t) => opt(`face:${t.id}`, `朝向：${t.name}`)).join('')}${v.cam ? opt('custom', '自訂（擷取的 3D 視角）') : ''}</select>
+              <button type="button" class="btn small" data-tr="cap" title="使用目前 3D 畫面的位置與方向">擷取 3D</button></div>
+            <div class="tr-row"><label>轉向</label><input type="range" data-tr="turn" min="-180" max="180" step="5" value="${v.turn}" title="鏡頭往左（負）或往右（正）轉"><span class="tr-turn">${v.turn > 0 ? '右 ' : v.turn < 0 ? '左 ' : ''}${Math.abs(v.turn)}°</span>
+              <button type="button" class="btn small" data-tr="prev" title="在右側預覽這一站的畫面">預覽</button></div>
+            <div class="tr-row"><label>停留</label><select data-tr="hold">${[[0, '標準'], [3, '多 3 秒'], [6, '多 6 秒'], [10, '多 10 秒']].map(([n, t]) => `<option value="${n}" ${st.hold === n ? 'selected' : ''}>${t}</option>`).join('')}</select>
+              <input type="text" data-tr="title" value="${esc(st.title)}" placeholder="字幕名稱（預設：${esc(st.name)}）" maxlength="20"></div>
+            <textarea rows="1" data-tr="note" placeholder="特別注意的細節（選填），例：窗邊的貴妃椅">${esc(st.note)}</textarea>
+          </div>
           <div class="tr-hint"></div>
-        </li>`).join('')}</ol>`;
+        </li>`;
+      }).join('')}</ol>
+      <div class="tr-add"><select data-tr="addroom">${rooms.map((r) => `<option value="${r.id}">${esc(r.name)}</option>`).join('')}</select><button type="button" class="btn small" data-tr="add" title="新增一站，同一個房間可以有多站（例如客廳、餐廳各一站）">＋ 新增一站</button></div>`;
     this.tourSummary();
   }
 
   bindTourRoute() {
     const box = $('#tourRoute');
     const idx = (el) => Number(el.closest('li')?.dataset.i);
+    const step = (el) => this.tourList[idx(el)];
     box.addEventListener('click', (e) => {
       const b = e.target.closest('button[data-tr]');
       if (!b) return;
-      if (b.dataset.tr === 'reset') { store.update((p) => { delete p.settings.tour; }, 'tour'); this.tourRoute(true); return; }
-      const i = idx(b), j = i + (b.dataset.tr === 'up' ? -1 : 1);
-      const L = this.tourList;
-      if (j < 0 || j >= L.length) return;
-      [L[i], L[j]] = [L[j], L[i]];
-      this.saveTourSteps(true);
-      this.tourRoute();
-      box.querySelector(`li[data-i="${j}"] [data-tr="${b.dataset.tr}"]`)?.focus();
+      const a = b.dataset.tr, L = this.tourList;
+      if (a === 'reset') { store.update((p) => { delete p.settings.tour; }, 'tour'); this.tourRoute(true); return; }
+      if (a === 'add') {
+        const room = box.querySelector('[data-tr="addroom"]').value;
+        const base = L.find((st) => st.room === room);
+        const at = L.map((st) => st.room).lastIndexOf(room) + 1;
+        L.splice(at, 0, { id: `${room}~${Date.now().toString(36)}`, room, skip: false, note: '', title: '', view: { mode: 'auto', target: null, turn: 0, cam: null }, hold: 0, name: base.name });
+        this.saveTourSteps(); this.tourRoute();
+        box.querySelector(`li[data-i="${at}"]`)?.scrollIntoView({ block: 'nearest' });
+        return;
+      }
+      const i = idx(b), st = L[i];
+      if (a === 'up' || a === 'down') {
+        const j = i + (a === 'up' ? -1 : 1);
+        if (j < 0 || j >= L.length) return;
+        [L[i], L[j]] = [L[j], L[i]];
+        this.saveTourSteps(); this.tourRoute();
+        box.querySelector(`li[data-i="${j}"] [data-tr="${a}"]`)?.focus();
+      } else if (a === 'del') {
+        L.splice(i, 1);
+        this.saveTourSteps(); this.tourRoute();
+      } else if (a === 'cap') {
+        const cam = this.view3d.camera, d = new THREE.Vector3();
+        cam.getWorldDirection(d);
+        st.view = { ...st.view, mode: 'custom', turn: 0, cam: { x: cam.position.x * 100, y: cam.position.z * 100, h: cam.position.y, yaw: Math.atan2(d.x, -d.z), pitch: Math.asin(Math.max(-1, Math.min(1, d.y))) } };
+        this.saveTourSteps(); this.tourRoute();
+        this.previewTourStep(st.id);
+        toast('已擷取目前 3D 畫面的視角。要換角度：關閉此視窗，在 3D 畫面（建議按「漫遊」走到想要的位置）轉好方向，再回來按「擷取 3D」');
+      } else if (a === 'prev') this.previewTourStep(st.id);
     });
     box.addEventListener('change', (e) => {
-      if (e.target.dataset.tr !== 'use') return;
-      const li = e.target.closest('li');
-      this.tourList[idx(e.target)].skip = !e.target.checked;
-      li.classList.toggle('skip', !e.target.checked);
-      li.querySelector('textarea').hidden = !e.target.checked;
-      this.saveTourSteps(true);
-      this.tourSummary();
+      const t = e.target.dataset.tr;
+      if (!t || t === 'addroom') return;
+      const st = step(e.target), li = e.target.closest('li');
+      if (t === 'use') {
+        st.skip = !e.target.checked;
+        li.classList.toggle('skip', st.skip);
+        li.querySelector('.tr-body').hidden = st.skip;
+      } else if (t === 'mode') {
+        const v = e.target.value;
+        st.view = { ...st.view, mode: v.startsWith('face:') ? 'face' : v, target: v.startsWith('face:') ? v.slice(5) : st.view.target };
+        this.previewTourStep(st.id);
+      } else if (t === 'hold') st.hold = Number(e.target.value);
+      else if (t === 'turn') this.previewTourStep(st.id);
+      else return;
+      this.saveTourSteps(); this.tourSummary();
     });
     box.addEventListener('input', (e) => {
-      if (e.target.dataset.tr !== 'note') return;
-      this.tourList[idx(e.target)].note = e.target.value;
+      const t = e.target.dataset.tr;
+      if (t === 'turn') {
+        const st = step(e.target), n = Number(e.target.value);
+        st.view = { ...st.view, turn: n };
+        e.target.nextElementSibling.textContent = `${n > 0 ? '右 ' : n < 0 ? '左 ' : ''}${Math.abs(n)}°`;
+        // 拖曳時延遲預覽，放開後立即更新
+        clearTimeout(this.tourPrevT);
+        this.tourPrevT = setTimeout(() => this.previewTourStep(st.id), 250);
+        return;
+      }
+      if (t !== 'note' && t !== 'title') return;
+      const st = step(e.target);
+      st[t] = e.target.value;
+      if (t === 'title') e.target.closest('li').querySelector('.tr-head b').textContent = st.title || st.name;
       // 輸入時延遲存檔與重算，避免每個字都重建
       clearTimeout(this.tourNoteT);
       this.tourNoteT = setTimeout(() => { this.saveTourSteps(); this.tourSummary(); }, 350);
@@ -1276,8 +1341,38 @@ class App {
   }
 
   saveTourSteps() {
-    const steps = this.tourList.map(({ room, skip, note }) => ({ room, skip, note }));
+    const steps = this.tourList.map(({ id, room, skip, note, title, view, hold }) => ({ id, room, skip, note, title, view, hold }));
     store.update((p) => { p.settings.tour = { steps }; }, 'tour');
+  }
+
+  // 在右側預覽區顯示某一站的畫面
+  previewTourStep(id) {
+    if (this.tour) return;
+    const { width, height } = this.tourSize();
+    // 預覽用較小的解析度，速度較快
+    const k = Math.min(1, 640 / Math.max(width, height));
+    const urls = previewStop(this.view3d, { width: Math.round(width * k / 2) * 2, height: Math.round(height * k / 2) * 2, pace: Number($('#tPace').value), captions: $('#tCaptions').checked, steps: this.tourList }, id);
+    if (!urls) { toast('這一站目前不會拍攝（已略過）'); return; }
+    // 大圖為中段，下方三格為開始、中段、結束，點小圖可放大
+    const big = new Image();
+    big.src = urls[1]; big.alt = '預覽';
+    const strip = document.createElement('div');
+    strip.className = 'tour-strip';
+    ['開始', '中段', '結束'].forEach((label, n) => {
+      const f = document.createElement('figure');
+      f.innerHTML = `<img src="${urls[n]}" alt="${label}"><figcaption>${label}</figcaption>`;
+      f.classList.toggle('on', n === 1);
+      f.addEventListener('click', () => { big.src = urls[n]; for (const x of strip.children) x.classList.toggle('on', x === f); });
+      strip.appendChild(f);
+    });
+    const wrap = document.createElement('div');
+    wrap.className = 'tour-preview';
+    wrap.append(big, strip);
+    $('#tourHost').replaceChildren(wrap);
+    const st = this.tourList.find((x) => x.id === id);
+    $('#tourStatus').textContent = `預覽：${st ? st.title || st.name : ''}（點下方小圖切換開始、中段、結束）`;
+    if (this.isMobileLayout()) $('#tourHost').scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    for (const li of $('#tourRoute').querySelectorAll('li[data-i]')) li.classList.toggle('previewing', this.tourList[Number(li.dataset.i)]?.id === id);
   }
 
   // 預估長度、每一站會怎麼拍（特寫哪些對象、哪些文字以字幕顯示、是否淡出切換）
@@ -1285,18 +1380,23 @@ class App {
     if (!this.tourList) return;
     const { width, height } = this.tourSize();
     const plan = planTour(store.project, { aspect: width / height, pace: Number($('#tPace').value), steps: this.tourList });
-    $('#tourLen').textContent = plan ? `走訪順序（約 ${Math.round(plan.duration)} 秒）` : '走訪順序（請至少勾選一個空間）';
-    const stops = new Map((plan?.order || []).map((o, k) => [o.room.id, { ...o, first: k === 0 }]));
+    $('#tourLen').textContent = plan ? `走訪順序（${plan.order.length} 站，約 ${Math.round(plan.duration)} 秒）` : '走訪順序（請至少勾選一站）';
+    const stops = new Map((plan?.order || []).map((o, k) => [o.id, { ...o, first: k === 0 }]));
     for (const li of $('#tourRoute').querySelectorAll('li[data-i]')) {
       const st = this.tourList[Number(li.dataset.i)];
-      const o = stops.get(st.room);
+      const o = stops.get(st.id);
       const hint = li.querySelector('.tr-hint');
       if (!o) { hint.textContent = '不停留（需要時只會穿過）'; continue; }
       const parts = [];
-      if (!o.first && !o.via) parts.push('從上一站淡出切換');
+      if (!o.first && !o.via && !o.same) parts.push('從上一站淡出切換');
+      if (o.same) parts.push('在同一個房間移動過來');
+      if (st.view.mode === 'face') parts.push(`朝向${li.querySelector('[data-tr="mode"]').selectedOptions[0]?.textContent.replace('朝向：', '') || '指定對象'}`);
+      if (st.view.mode === 'custom') parts.push('自訂視角');
+      if (st.view.turn) parts.push(`${st.view.turn > 0 ? '右' : '左'}轉 ${Math.abs(st.view.turn)}°`);
+      if (st.hold) parts.push(`多停留 ${st.hold} 秒`);
       if (o.shotDetails.length) parts.push(`特寫：${o.shotDetails.join('、')}`);
       if (o.shotTexts.length) parts.push(`字幕：${o.shotTexts.join('，')}`);
-      if (!st.note.trim()) parts.push('照原設計運鏡');
+      if (!st.note.trim() && st.view.mode === 'auto' && !st.view.turn) parts.push('照原設計運鏡');
       hint.textContent = parts.join(' · ');
     }
   }

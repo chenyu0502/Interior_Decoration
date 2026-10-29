@@ -201,29 +201,57 @@ function defaultStops(g) {
   return seq;
 }
 
-// 走訪步驟（可編輯）：{ room, skip, note }。依專案中儲存的順序，新增的房間依預設順序補在後面；
-// 走道預設不停留。reset 為 true 時忽略儲存的設定。
+// 走訪步驟（可編輯）：{ id, room, skip, note, title, view, hold }
+//   view：{ mode: 'auto' | 'face' | 'custom', target（朝向的家具或門窗編號）, turn（左右轉向，度）, cam（自訂視角） }
+//   hold：多停留的秒數。依專案中儲存的步驟，沒有任何一站的房間依預設順序補在後面；走道預設不停留。
+//   同一個房間可以有多站（新增的站點），reset 為 true 時忽略儲存的設定。
+function normView(v) {
+  const mode = ['auto', 'face', 'custom'].includes(v?.mode) ? v.mode : 'auto';
+  const turn = Math.max(-180, Math.min(180, Number(v?.turn) || 0));
+  const cam = v?.cam && ['x', 'y', 'h', 'yaw', 'pitch'].every((k) => Number.isFinite(v.cam[k])) ? { ...v.cam } : null;
+  return { mode: mode === 'custom' && !cam ? 'auto' : mode, target: v?.target || null, turn, cam };
+}
 export function tourSteps(P = store.project, { reset = false } = {}) {
   const g = tourGraph(P);
   const order = defaultStops(g);
-  const def = [...order.map((id) => ({ room: id, skip: false, note: '' })),
-    ...g.rooms.filter((r) => !order.includes(r.id)).map((r) => ({ room: r.id, skip: true, note: '' }))];
+  const blank = (room, skip) => ({ id: room, room, skip, note: '', title: '', view: normView(), hold: 0 });
+  const def = [...order.map((id) => blank(id, false)), ...g.rooms.filter((r) => !order.includes(r.id)).map((r) => blank(r.id, true))];
   const saved = reset ? [] : (P.settings.tour?.steps || []).filter((st) => g.byId.has(st.room));
   const have = new Set(saved.map((st) => st.room));
-  return [...saved.map((st) => ({ room: st.room, skip: !!st.skip, note: String(st.note || '') })), ...def.filter((st) => !have.has(st.room))]
+  const ids = new Set();
+  return [...saved.map((st) => {
+    // 舊版存檔沒有編號：以房間編號當作編號，重複時加序號
+    let id = String(st.id || st.room);
+    for (let k = 2; ids.has(id); k++) id = `${st.room}~${k}`;
+    ids.add(id);
+    return { id, room: st.room, skip: !!st.skip, note: String(st.note || ''), title: String(st.title || ''), view: normView(st.view), hold: Math.max(0, Math.min(20, Number(st.hold) || 0)) };
+  }), ...def.filter((st) => !have.has(st.room))]
     .map((st) => ({ ...st, name: g.byId.get(st.room).name }));
 }
 
-// 依步驟排出實際走訪：每一站與從上一站走過來的路線（太遠或不相通時 via 為 null，以淡出淡入切換）
+// 依步驟排出實際走訪：每一站與從上一站走過來的路線（太遠或不相通時 via 為 null，以淡出淡入切換；
+// 同一個房間的下一站為 same，直接在房內移動過去）
 export function tourOrder(P = store.project, steps = tourSteps(P)) {
   const g = tourGraph(P);
   const seq = [];
   for (const st of steps) {
     if (st.skip || !g.byId.has(st.room)) continue;
     const prev = seq.at(-1);
-    seq.push({ room: g.byId.get(st.room), note: st.note || '', via: prev ? routeBetween(g, prev.room.id, st.room) : null });
+    const room = g.byId.get(st.room);
+    const same = !!prev && prev.room.id === st.room;
+    // 自訂視角在房間外（例如俯瞰）時以淡出淡入切換
+    const outside = st.view?.mode === 'custom' && !pointInPolygon(st.view.cam.x, st.view.cam.y, room.points);
+    seq.push({
+      id: st.id || st.room, room, note: st.note || '', title: st.title || '', view: normView(st.view), hold: st.hold || 0,
+      same: same && !outside, via: prev && !same && !outside ? routeBetween(g, prev.room.id, st.room) : null,
+    });
   }
   return seq;
+}
+
+// 視角可朝向的對象（家具、門窗），給介面的選單使用
+export function viewTargets(room, P = store.project) {
+  return detailCandidates(room, P).filter((c) => c.type === 'item' || c.type === 'opening').map((c) => ({ id: c.id, name: c.name }));
 }
 
 // ---------------------------------------------------- 描述中提到的細節（特寫）
@@ -247,7 +275,7 @@ function detailCandidates(room, P) {
     if (!pointInPolygon(it.x, it.y, room.points)) continue;
     const def = CATALOG_MAP[it.kind];
     const name = it.name || def?.name || '家具';
-    out.push({ type: 'item', name, keys: [name, def?.name].filter(Boolean), it, size: Math.max(it.w, it.d) });
+    out.push({ type: 'item', id: it.id, name, keys: [name, def?.name].filter(Boolean), it, size: Math.max(it.w, it.d) });
   }
   for (const op of P.openings) {
     const def = OPENING_MAP[op.kind];
@@ -260,7 +288,7 @@ function detailCandidates(room, P) {
     else if (pointInPolygon(c.x - f.nx * off, c.y - f.ny * off, room.points)) n = [-f.nx, -f.ny];
     if (!n) continue;
     const win = def.cat === 'window';
-    out.push({ type: 'opening', name: def.name, keys: [def.name, ...(win ? ['窗戶', '窗景', '窗'] : ['門口', '門'])], op, def, c: [c.x, c.y], n, size: op.width || def.width });
+    out.push({ type: 'opening', id: op.id, name: def.name, keys: [def.name, ...(win ? ['窗戶', '窗景', '窗'] : ['門口', '門'])], op, def, c: [c.x, c.y], n, size: op.width || def.width });
   }
   out.push({ type: 'floor', name: '地板', keys: ['地板', '地磚', '地面', '磁磚', '木地板', '拼花'] });
   out.push({ type: 'ceiling', name: '天花板', keys: ['天花板', '天花', '吊燈', '燈具', '燈光'] });
@@ -395,8 +423,12 @@ function moveShot(a, b, pace) {
 }
 
 // 單一房間的運鏡：從離焦點最遠的角落（有入口時偏向入口那側）慢慢推近並橫移
-function roomShot(room, P, entryPt, pace) {
-  const focus = roomFocus(room);
+function roomShot(room, P, entryPt, pace, view = normView()) {
+  if (view.mode === 'custom') return customShot(room, view, pace);
+  let focus = roomFocus(room);
+  // 朝向指定的家具或門窗：以它為焦點，從房內離它最遠（4.5 公尺內）的位置拍過去
+  const target = view.mode === 'face' ? detailCandidates(room, P).find((c) => c.id === view.target) : null;
+  if (target) return faceShot(room, P, target, pace, view);
   const cand = standPoints(room, P);
   if (!cand.length) cand.push(focus);
   const small = Math.abs(polygonArea(room.points)) < 6e4;
@@ -424,9 +456,73 @@ function roomShot(room, P, entryPt, pace) {
   const pos = (u) => { const e = ease(u); return v3(lerp(best[0], end[0], e), EYE, lerp(best[1], end[1], e)); };
   const look = (u) => {
     const e = ease(u);
-    return levelLook(pos(u), v3(focus[0] + px * sweep * (e - 0.5) * 2, EYE, focus[1] + py * sweep * (e - 0.5) * 2));
+    return turnLook(pos(u), levelLook(pos(u), v3(focus[0] + px * sweep * (e - 0.5) * 2, EYE, focus[1] + py * sweep * (e - 0.5) * 2)), view.turn);
   };
   return { kind: 'room', room, dur, pos, look, start: best, end, caption: room.name, sub: areaText(area) };
+}
+
+// 視線繞相機左右轉 deg 度（正值往右）
+function turnLook(p, look, deg) {
+  if (!deg) return look;
+  const a = (deg * Math.PI) / 180;
+  const d = look.clone().sub(p);
+  const c = Math.cos(a), s = Math.sin(a);
+  return p.clone().add(new THREE.Vector3(d.x * c - d.z * s, d.y, d.x * s + d.z * c));
+}
+
+// 朝向指定對象：站在房內離它最遠的位置（4.5 公尺內）慢慢推近，視線對準它並小幅橫移
+function faceShot(room, P, t, pace, view) {
+  const center = t.type === 'item' ? [t.it.x, t.it.y] : t.c;
+  const hc = t.type === 'item' ? (t.it.elev || 0) + (t.it.h || 80) / 2 : (t.op.sill ?? t.def.sill ?? 0) + (t.op.height || t.def.height) / 2;
+  const cand = standPoints(room, P);
+  if (!cand.length) cand.push(roomFocus(room));
+  let best = cand[0], bestS = -Infinity;
+  for (const p of cand) {
+    const d = Math.hypot(p[0] - center[0], p[1] - center[1]);
+    const sc = d <= 450 ? d : 450 - (d - 450);
+    if (sc > bestS) { bestS = sc; best = p; }
+  }
+  const dx = center[0] - best[0], dy = center[1] - best[1];
+  const len = Math.hypot(dx, dy) || 1;
+  let push = Math.min(90, len * 0.25);
+  const ok = (x, y) => pointInPolygon(x, y, room.points) && edgeDist(x, y, room.points) >= 30;
+  while (push > 0 && !ok(best[0] + (dx / len) * push, best[1] + (dy / len) * push)) push -= 15;
+  push = Math.max(0, push);
+  const end = [best[0] + (dx / len) * push, best[1] + (dy / len) * push];
+  const px = -dy / len, py = dx / len, sweep = Math.min(50, len * 0.12);
+  const area = Math.abs(polygonArea(room.points));
+  const dur = Math.min(7.5, 4.2 + area / 4e5) / pace;
+  const pos = (u) => { const e = ease(u); return v3(lerp(best[0], end[0], e), EYE, lerp(best[1], end[1], e)); };
+  // 視線略往對象高度看，但不超過 ±12°，牆角垂直線才不會太歪
+  const look = (u) => {
+    const e = ease(u), p = pos(u);
+    const tgt = v3(center[0] + px * sweep * (e - 0.5) * 2, hc * S, center[1] + py * sweep * (e - 0.5) * 2);
+    const flat = levelLook(p, tgt);
+    const dist = Math.hypot(tgt.x - p.x, tgt.z - p.z) || 1;
+    const pitch = Math.max(-0.21, Math.min(0.21, Math.atan2(tgt.y - p.y, dist)));
+    return turnLook(p, flat.setY(p.y + Math.tan(pitch) * 3), view.turn);
+  };
+  return { kind: 'room', room, dur, pos, look, start: best, end, caption: room.name, sub: areaText(area) };
+}
+
+// 自訂視角：從擷取的 3D 視角位置往前推近 30 公分並小幅橫移
+function customShot(room, view, pace) {
+  const c = view.cam;
+  const yaw = c.yaw + (view.turn * Math.PI) / 180;
+  const dir = new THREE.Vector3(Math.sin(yaw) * Math.cos(c.pitch), Math.sin(c.pitch), -Math.cos(yaw) * Math.cos(c.pitch));
+  const p0 = new THREE.Vector3(c.x * S, c.h, c.y * S);
+  const flat = new THREE.Vector3(dir.x, 0, dir.z).normalize();
+  const inRoom = pointInPolygon(c.x, c.y, room.points);
+  const fwd = inRoom && pointInPolygon(c.x + flat.x * 30, c.y + flat.z * 30, room.points) && edgeDist(c.x + flat.x * 30, c.y + flat.z * 30, room.points) >= 20 ? 0.3 : 0;
+  const area = Math.abs(polygonArea(room.points));
+  const dur = Math.min(7.5, 4.2 + area / 4e5) / pace;
+  const pos = (u) => p0.clone().addScaledVector(flat, fwd * ease(u));
+  const look = (u) => {
+    const a = 0.09 * (ease(u) - 0.5) * 2;
+    const d = dir.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), -a);
+    return pos(u).add(d.multiplyScalar(3));
+  };
+  return { kind: 'room', room, dur, pos, look, start: [c.x, c.y], end: [c.x, c.y], caption: room.name, sub: areaText(area), fov: inRoom ? null : 55 };
 }
 
 function v3(x, y, z) { return new THREE.Vector3(x * S, y, z * S); }
@@ -512,24 +608,30 @@ export function planTour(P = store.project, { aspect = 16 / 9, pace = 1, steps }
   const order = tourOrder(P, steps || tourSteps(P));
   if (!order.length) return null;
   const shots = [];
-  const totalArea = order.reduce((s, x) => s + Math.abs(polygonArea(x.room.points)), 0);
-  shots.push({ ...aerialShot(P, aspect, 1, pace), caption: P.name || '室內設計', sub: `${order.length} 個空間 · ${areaText(totalArea)}`, title: true, fadeOut: true });
+  const uniq = [...new Map(order.map((x) => [x.room.id, x.room])).values()];
+  const totalArea = uniq.reduce((s, r) => s + Math.abs(polygonArea(r.points)), 0);
+  shots.push({ ...aerialShot(P, aspect, 1, pace), caption: P.name || '室內設計', sub: `${uniq.length} 個空間 · ${areaText(totalArea)}`, title: true, fadeOut: true });
   let prev = null;
   for (const step of order) {
-    const shot = roomShot(step.room, P, step.via?.at(-1).to, pace);
+    const shot = roomShot(step.room, P, step.via?.at(-1).to, pace, step.view);
+    shot.stepId = step.id;
+    if (step.title) shot.caption = step.title;
+    if (step.hold) shot.dur += step.hold / pace;
     // 描述：提到的家具、門窗、地板或天花板加拍特寫；找不到對象的句子顯示在房間字幕下方
     const { details, texts } = matchNote(step.room, step.note, P);
     step.shotDetails = []; step.shotTexts = [...texts];
     if (texts.length) { shot.note = texts.join('，'); shot.dur += Math.min(3, 0.8 + shot.note.length * 0.06) / pace; }
     if (prev && step.via) shots.push(walkShot(prev, shot, step.via, pace));
+    else if (prev && step.same) shots.push(moveShot(prev, shot, pace));
     else shot.fadeIn = true;
-    if (prev && !step.via) prev.fadeOut = true;
+    if (prev && !step.via && !step.same) prev.fadeOut = true;
     shots.push(shot);
     prev = shot;
     for (const d of details) {
       const ds = detailShot(step.room, d, P, pace);
       if (!ds) { shot.note = [shot.note, d.phrase].filter(Boolean).join('，'); step.shotTexts.push(d.phrase); continue; }
       step.shotDetails.push(d.target.name);
+      ds.stepId = step.id;
       shots.push(moveShot(prev, ds, pace), ds);
       prev = ds;
     }
@@ -560,6 +662,26 @@ function wrapLines(ctx, text, maxW, maxLines) {
   return lines;
 }
 
+// 預覽某一站的畫面（不錄影）：算出該站運鏡開始、中段、結束三格，回傳 JPEG 網址陣列
+export function previewStop(view, opts, stepId, at = [0.08, 0.5, 0.94]) {
+  const p = new TourPlayer(view, { ...opts, record: false });
+  if (!p.ok) return null;
+  const s = p.plan.shots.find((x) => x.stepId === stepId && x.kind === 'room');
+  if (!s) return null;
+  p.start();
+  view.tour = null; // 由這裡手動推進，不經過動畫迴圈
+  try {
+    return at.map((f) => {
+      p.time = s.t0 + s.dur * f - 0.8;
+      for (let k = 0; k < 8; k++) p.frame(0.1);
+      return p.canvas.toDataURL('image/jpeg', 0.86);
+    });
+  } finally {
+    view.tour = p;
+    p.stop(false);
+  }
+}
+
 // 支援的錄影格式：優先 MP4（iPhone、Windows 都能直接播放），否則 WebM
 export function pickMime() {
   if (typeof MediaRecorder === 'undefined') return null;
@@ -572,14 +694,14 @@ export function pickMime() {
 // 沒有時改用 MediaRecorder 即時錄影。
 const FPS = 30;
 export class TourPlayer {
-  constructor(view, { width = 1280, height = 720, pace = 1, captions = true, openDoors = true, record = true, encoder = null, onProgress, onDone } = {}) {
+  constructor(view, { width = 1280, height = 720, pace = 1, captions = true, openDoors = true, record = true, encoder = null, steps, onProgress, onDone } = {}) {
     this.view = view;
     this.W = width; this.H = height;
     this.captions = captions;
     this.openDoors = openDoors;
     this.onProgress = onProgress;
     this.onDone = onDone;
-    this.plan = planTour(store.project, { aspect: width / height, pace });
+    this.plan = planTour(store.project, { aspect: width / height, pace, steps });
     this.canvas = document.createElement('canvas');
     this.canvas.width = width; this.canvas.height = height;
     this.ctx = this.canvas.getContext('2d');
