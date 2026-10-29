@@ -61,9 +61,22 @@ export class RenderStudio {
   // 建立渲染用場景：沿用目前的牆、地板、門窗與家具，另外配置天空、太陽與室內燈光
   buildScene(opts, mod) {
     const v = this.v, P = store.project;
-    const t = RENDER_TIMES[opts.time] || RENDER_TIMES.day;
+    let t = RENDER_TIMES[opts.time] || RENDER_TIMES.day;
+    // 日照模擬：依指定時刻的太陽位置與光色，太陽低於地平線時改用黃昏或夜晚的天空
+    const sim = opts.sunSim;
+    if (sim) {
+      const base = sim.alt > 12 ? RENDER_TIMES.day : sim.alt > -2 ? RENDER_TIMES.dusk : RENDER_TIMES.night;
+      t = { ...base, sun: sim.alt > 0 ? { ...(base.sun || RENDER_TIMES.day.sun), color: sim.color, intensity: Math.max(0.6, sim.intensity * 1.3) } : null };
+    }
     const scene = new THREE.Scene();
     const structure = v.structure.clone();
+    if (sim) {
+      // 光線追蹤只計算材質正面：日照模擬時天花板改為雙面，陽光才不會穿過屋頂
+      structure.traverse((o) => {
+        if (!o.isMesh || !o.userData.ceiling) return;
+        o.material = o.material.clone(); o.material.side = THREE.DoubleSide; this.disposables.push(o.material);
+      });
+    }
     scene.add(structure, v.itemsGroup.clone());
     this.splitMultiMaterial(scene);
 
@@ -96,7 +109,8 @@ export class RenderStudio {
     const b = projectBounds(P);
     const cx = ((b.x0 + b.x1) / 2) * S, cz = ((b.y0 + b.y1) / 2) * S;
     let sunDir = null;
-    if (t.sun) {
+    if (sim && t.sun) sunDir = new THREE.Vector3(sim.dir.x, sim.dir.y, sim.dir.z).normalize();
+    else if (t.sun) {
       const el = THREE.MathUtils.degToRad(t.sun.elev), az = THREE.MathUtils.degToRad(t.sun.azim + (opts.sunRotate || 0));
       sunDir = new THREE.Vector3(Math.cos(el) * Math.sin(az), Math.sin(el), Math.cos(el) * Math.cos(az));
     }

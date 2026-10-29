@@ -13,6 +13,7 @@ import { nearestWall, roomAt, wallOnRoom, wallSideToward, scaleProject } from '.
 import { autoDesign, analyzeRooms, ROOM_TYPES } from './ai/designer.js';
 import * as claude from './ai/claude.js';
 import { DesignAssistant } from './ai/assistant.js';
+import { SunPanel } from './ui/sun-panel.js';
 import { VERSION, CHANGELOG, compareVersions } from './version.js';
 import { Updater } from './core/updater.js';
 import { mountPano, panoViewerHTML } from './editor/pano-viewer.js';
@@ -50,6 +51,7 @@ class App {
     this.view3d = new View3D($('#view3d'), this);
     this.setupLive();
     this.setupAssistant();
+    this.sunPanel = new SunPanel(this);
     this.selectedStyle = null;
     this.catFilter = 'all';
     this.buildCatalogUI();
@@ -947,6 +949,7 @@ class App {
         walk: () => this.toggleWalk(),
         render: () => this.openRender(),
         assistant: () => this.toggleAssistant(),
+        sun: () => this.sunPanel.toggle(),
         live: () => { const l = this.view3d.live; l.setEnabled(!l.enabled); toast(l.enabled ? '實景模式已開啟：停止操作約 1 秒後，畫面會逐漸算成照片' : '實景模式已關閉'); },
         vr: () => this.toggleVR(),
         night: () => { store.update((p) => { p.settings.night = !p.settings.night; }, 'settings'); this.syncToggles(); },

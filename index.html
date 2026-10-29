@@ -125,6 +125,7 @@
           <button class="btn small" data-action="cutaway" id="cutBtn" title="把牆降到 120 cm，方便俯瞰配置">矮牆</button>
           <button class="btn small" data-action="ceiling" id="ceilBtn" title="顯示天花板">天花板</button>
           <button class="btn small" data-action="vr" id="vrBtn" hidden title="戴上 VR 頭盔，以實際尺寸走進室內">◈ VR</button>
+          <button class="btn small" data-action="sun" id="sunBtn" title="依地點、座向、日期與時間模擬陽光，查看日照與西曬">◔ 日照</button>
           <button class="btn small" data-action="live" id="liveBtn" title="停止操作約 1 秒後，自動以光線追蹤把畫面算成實景照片">◐ 實景</button>
           <button class="btn small primary" data-action="render" title="以光線追蹤產生寫實效果圖">✦ 渲染</button>
         </div>
@@ -135,6 +136,7 @@
           <button class="btn small" id="gyroBtn" type="button">◎ 陀螺儀</button>
         </div>
       </div>
+      <section class="sun-panel" id="sunPanel" hidden aria-label="日照模擬"></section>
       <section class="ai-chat" id="aiChat" hidden aria-label="一句話改設計">
         <div class="ai-chat-head"><b>✦ 一句話改設計</b><span class="hint" id="aiChatHint">由 Claude 直接修改，可一鍵復原</span><button class="icon-btn" id="aiChatClose" title="關閉">✕</button></div>
         <div class="ai-chat-log" id="aiChatLog"></div>

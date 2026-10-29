@@ -199,6 +199,7 @@ export class LiveTrace {
       ceiling: inside,
       engine: 'pathtracing',
       detail: true,
+      ...(v.sunSim && !night ? { sunSim: v.sunSim } : {}),
     };
   }
 
