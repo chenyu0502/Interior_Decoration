@@ -5,9 +5,16 @@
 //   次版號：新增功能
 //   修訂號：錯誤修正
 
-export const VERSION = '1.24.0';
+export const VERSION = '1.25.0';
 
 export const CHANGELOG = [
+  {
+    version: '1.25.0',
+    date: '2026-10-29',
+    notes: [
+      '新增家具「貴妃椅」（客廳）：長座面、左端捲邊高靠頭、沿後側由高漸低的半靠背與圓柱抱枕，椅身與抱枕顏色可分別調整，跟著風格變換布料與椅腳。',
+    ],
+  },
   {
     version: '1.24.0',
     date: '2026-10-16',
