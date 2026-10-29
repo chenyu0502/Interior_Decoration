@@ -146,10 +146,15 @@ export function tourOrder(P = store.project) {
     || rooms.reduce((a, b) => (Math.abs(polygonArea(b.points)) > Math.abs(polygonArea(a.points)) ? b : a));
   // 客廳、餐廳等公共空間排前面，衛浴與儲藏室排後面
   const rank = (r) => (/客|餐|起居|廚/.test(r.name) ? 0 : /主臥/.test(r.name) ? 1 : /臥|房|書/.test(r.name) ? 2 : /浴|廁|儲|陽台|工作/.test(r.name) ? 4 : 3);
+  // 走道、走廊只穿過不停留（窄走道裡停下來只會拍到門）；整間只有走道時仍照常拍
+  const pass = new Set(rooms.filter((r) => /走道|走廊|過道|廊道/.test(r.name)).map((r) => r.id));
+  if (pass.size === rooms.length) pass.clear();
+  if (pass.has(start.id)) start = rooms.find((r) => !pass.has(r.id));
+  const stops = rooms.filter((r) => !pass.has(r.id)).length;
   const seq = [{ room: start, via: null }];
   const seen = new Set([start.id]);
   let cur = start;
-  while (seen.size < rooms.length) {
+  while (seen.size < stops) {
     // 由目前房間找最近（經過最少通道）的新房間；同距離時依房間類型排序
     const prev = new Map([[cur.id, null]]);
     let frontier = [cur.id], target = null;
@@ -160,9 +165,9 @@ export function tourOrder(P = store.project) {
         prev.set(e.to, { id, e });
         next.push(e.to);
       }
-      const fresh = next.filter((id) => !seen.has(id)).map((id) => byId.get(id)).sort((x, y) => rank(x) - rank(y));
+      const fresh = next.filter((id) => !seen.has(id) && !pass.has(id)).map((id) => byId.get(id)).sort((x, y) => rank(x) - rank(y));
       if (fresh.length) target = fresh[0];
-      frontier = next.filter((id) => seen.has(id));
+      frontier = next.filter((id) => seen.has(id) || pass.has(id));
     }
     if (target) {
       const hops = [];
@@ -172,7 +177,7 @@ export function tourOrder(P = store.project) {
       seen.add(target.id); cur = target;
       continue;
     }
-    const pick = rooms.filter((r) => !seen.has(r.id)).sort((x, y) => rank(x) - rank(y))[0];
+    const pick = rooms.filter((r) => !seen.has(r.id) && !pass.has(r.id)).sort((x, y) => rank(x) - rank(y))[0];
     seq.push({ room: pick, via: null });
     seen.add(pick.id); cur = pick;
   }
@@ -184,8 +189,11 @@ function roomShot(room, P, entryPt, pace) {
   const focus = roomFocus(room);
   const cand = standPoints(room, P);
   if (!cand.length) cand.push(focus);
+  const small = Math.abs(polygonArea(room.points)) < 6e4;
   let best = cand[0], bestS = -Infinity;
-  for (const p of cand) {
+  // 6 m² 以下的小空間（浴室、儲藏室）：站在門口往內看，才拍得到整間
+  if (small && entryPt) { best = entryPt; bestS = Infinity; }
+  for (const p of bestS === Infinity ? [] : cand) {
     const d = Math.hypot(p[0] - focus[0], p[1] - focus[1]);
     const s = d - (entryPt ? 0.6 * Math.hypot(p[0] - entryPt[0], p[1] - entryPt[1]) : 0);
     if (s > bestS) { bestS = s; best = p; }
@@ -193,8 +201,8 @@ function roomShot(room, P, entryPt, pace) {
   const dx = focus[0] - best[0], dy = focus[1] - best[1];
   const len = Math.hypot(dx, dy) || 1;
   // 推近：最多 120 公分、不超過到焦點距離的 35%，且終點仍需可站立
-  let push = Math.min(120, len * 0.35);
-  const ok = (x, y) => pointInPolygon(x, y, room.points) && edgeDist(x, y, room.points) >= 35;
+  let push = small ? Math.min(40, len * 0.3) : Math.min(120, len * 0.35);
+  const ok = (x, y) => pointInPolygon(x, y, room.points) && edgeDist(x, y, room.points) >= (small ? 25 : 35);
   while (push > 0 && !ok(best[0] + (dx / len) * push, best[1] + (dy / len) * push)) push -= 15;
   push = Math.max(0, push);
   const end = [best[0] + (dx / len) * push, best[1] + (dy / len) * push];
