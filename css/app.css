@@ -321,6 +321,24 @@ input, select, textarea { font: inherit; color: inherit; }
 .tr-move .icon-btn { width: 24px; height: 24px; font-size: 12px; }
 .tr-list textarea { width: 100%; box-sizing: border-box; margin-top: 4px; font: inherit; font-size: 12px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; resize: vertical; background: var(--panel); color: var(--text); }
 .tr-hint { color: var(--muted); font-size: 11px; margin-top: 2px; }
+.tr-list li.previewing { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.tr-head small { color: var(--muted); font-weight: 400; }
+.tr-body { margin-top: 4px; }
+.tr-row { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
+.tr-row > label { color: var(--muted); font-size: 11px; width: 26px; flex: none; }
+.tr-row select { flex: 1; min-width: 0; font-size: 12px; padding: 2px 4px; }
+.tr-row input[type=range] { flex: 1; min-width: 0; }
+.tr-row input[type=text] { flex: 1; min-width: 0; font-size: 12px; padding: 3px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--text); }
+.tr-turn { width: 44px; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.tr-add { display: flex; gap: 6px; align-items: center; margin-top: 4px; }
+.tr-add select { flex: 1; min-width: 0; font-size: 12px; padding: 3px 6px; }
+.tour-preview { width: 100%; box-sizing: border-box; display: flex; flex-direction: column; gap: 6px; padding: 6px; }
+.tour-preview > img { display: block; max-width: 100%; max-height: 48vh; margin: 0 auto; border-radius: 6px; }
+.tour-strip { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.tour-strip figure { margin: 0; cursor: pointer; border: 2px solid transparent; border-radius: 6px; overflow: hidden; position: relative; }
+.tour-strip figure.on { border-color: var(--accent); }
+.tour-strip img { display: block; width: 100%; }
+.tour-strip figcaption { position: absolute; left: 4px; top: 4px; font-size: 11px; color: #fff; background: rgba(0,0,0,.55); padding: 0 6px; border-radius: 4px; }
 @media (max-width: 820px) {
   .render-body { grid-template-columns: 1fr; }
   .tour-canvas video, .tour-canvas canvas { max-height: 45vh; }
