@@ -605,6 +605,9 @@ export class Plan2D {
       }
     }
 
+    // 疊加圖層（日照範圍等），畫在地板之上、牆與家具之下
+    this.overlay?.(ctx, lw);
+
     // 牆
     const joins = wallJoins(P.walls);
     for (const w of P.walls) {

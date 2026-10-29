@@ -133,7 +133,8 @@ export class View3D {
     if (sig !== this._camSig) { this._camSig = sig; this.live.activity(); changed = true; }
     // 照片蓋在畫面上且沒有變動時，不必重畫即時畫面
     if (changed || !this.live.covering) this.renderer.render(this.scene, this.camera);
-    this.live.tick(!!this.app.studio?.running);
+    // 日照模擬的俯瞰畫面需要「看得穿、但擋得住陽光」的天花板，光線追蹤做不到，只在漫遊時計算實景
+    this.live.tick(!!this.app.studio?.running || (!!this.sunSim && this.mode !== 'walk'));
   }
 
   // ---------------------------------------------------- 場景同步
@@ -155,7 +156,7 @@ export class View3D {
     const P = store.project;
     const pal = paletteFor(P.design.styleId);
     const palKey = JSON.stringify(pal);
-    const sKey = JSON.stringify([P.walls, P.rooms, P.openings, P.settings.showCeiling, P.settings.wallHeight, P.settings.cutaway, palKey, this.mode]);
+    const sKey = JSON.stringify([P.walls, P.rooms, P.openings, P.settings.showCeiling, P.settings.wallHeight, P.settings.cutaway, palKey, this.mode, !!this.sunSim]);
     if (sKey !== this.structKey) {
       this.structKey = sKey;
       this.buildStructure(pal);
@@ -292,7 +293,20 @@ export class View3D {
     root.traverse((o) => {
       if (!o.isMesh) return;
       o.material = Array.isArray(o.material) ? o.material.map(conv) : conv(o.material);
+      // 玻璃與紗簾不擋陽光
+      const k = (Array.isArray(o.material) ? o.material[0] : o.material)?.userData?.kind;
+      if (k === 'glass' || k === 'sheer') o.castShadow = false;
     });
+  }
+
+  // 日照模擬：sim = { dir: {x,y,z} 朝向太陽, alt, color, intensity }，null 結束
+  setSunSim(sim) {
+    const was = !!this.sunSim;
+    this.sunSim = sim;
+    if (was !== !!sim) this.needsSync = true; // 天花板、矮牆需要重建
+    this.applyLighting();
+    this.renderer.shadowMap.needsUpdate = true;
+    this.live.activity(true);
   }
 
   clearGroup(g) {
@@ -369,7 +383,8 @@ export class View3D {
       floor.receiveShadow = true;
       floor.userData = { roomId: r.id };
       this.structure.add(floor);
-      if ((P.settings.showCeiling && !P.settings.cutaway) || this.mode === 'walk' || this.mode === 'vr') {
+      // 日照模擬時一律加上天花板：天花板只有朝下的一面，從上方俯瞰仍看得到室內，但會擋住陽光
+      if ((P.settings.showCeiling && !P.settings.cutaway) || this.mode === 'walk' || this.mode === 'vr' || this.sunSim) {
         // 天花板朝下：形狀以 (x, y) 建立再轉 +90°，位置才會與地板重疊（地板用 (x, -y) 轉 -90°）
         const cg = new THREE.ShapeGeometry(new THREE.Shape(r.points.map(([x, y]) => new THREE.Vector2(x * S, y * S))));
         cg.rotateX(Math.PI / 2);
@@ -383,6 +398,7 @@ export class View3D {
     const b = projectBounds(P);
     const cx = ((b.x0 + b.x1) / 2) * S, cz = ((b.y0 + b.y1) / 2) * S;
     const R = Math.max(b.x1 - b.x0, b.y1 - b.y0) * S * 0.75 + 2;
+    this._sunC = { x: cx, z: cz, R };
     this.sun.position.set(cx - R * 0.6, R * 1.6, cz - R * 0.9);
     this.sun.target.position.set(cx, 0, cz);
     const sc = this.sun.shadow.camera;
@@ -431,9 +447,24 @@ export class View3D {
     const temp = { modern: '#fff6ea', nordic: '#ffe9cf', japandi: '#ffe7c7', wabisabi: '#ffdcb0', luxury: '#ffe4bd' }[style] || '#ffeccc';
     this.hemi.intensity = night ? 0.12 : 1.1;
     this.sun.intensity = night ? 0 : 2.2;
+    this.sun.color.set('#fff3e0');
     this.scene.environmentIntensity = night ? 0.12 : 0.55;
     this.scene.background = night ? this.skyNight : this.skyDay;
     this.ground.material.color.set(night ? '#30343d' : '#dfe3e6');
+    const sim = this.sunSim;
+    if (sim && !night) {
+      // 依太陽高度調整：低角度時光線偏暖、天空較暗
+      const c = this._sunC || { x: 0, z: 0, R: 10 };
+      const d = sim.dir;
+      this.sun.position.set(c.x + d.x * c.R * 2.5, Math.max(0.05, d.y) * c.R * 2.5, c.z + d.z * c.R * 2.5);
+      this.sun.target.position.set(c.x, 0, c.z);
+      this.sun.color.set(sim.color);
+      this.sun.intensity = sim.intensity;
+      const k = Math.min(1, Math.max(0.15, (sim.alt + 4) / 30));
+      // 室內環境光調暗，陽光照到的地方才明顯
+      this.hemi.intensity = 0.22 + 0.33 * k;
+      this.scene.environmentIntensity = 0.14 + 0.2 * k;
+    }
     // 燈具光源（夜間模式啟用）
     this.clearGroup(this.lightsGroup);
     if (!night) return;
@@ -454,7 +485,8 @@ export class View3D {
 
   cutHeight() {
     const P = store.project;
-    return P.settings.cutaway && this.mode !== 'walk' && this.mode !== 'vr' ? 120 : 10000;
+    // 日照模擬時牆維持原高，陽光才會只從窗戶照入
+    return P.settings.cutaway && this.mode !== 'walk' && this.mode !== 'vr' && !this.sunSim ? 120 : 10000;
   }
 
   resetView() {
