@@ -33,7 +33,7 @@ Interior Studio：純前端靜態網頁的室內設計工具（2D 平面圖、�
 | `js/editor/vr.js` | VR 頭盔模式（WebXR、控制器移動與瞬間移動） |
 | `js/data/catalog.js` | 家具與門窗（2D 符號、3D 程序化模型、可調參數） |
 | `js/data/materials.js`、`styles.js`、`samples.js` | 材質、風格模板、範例平面圖 |
-| `js/ai/` | AI 自動設計、Claude 提案、圖片辨識平面圖 |
+| `js/ai/` | AI 自動設計、Claude 提案、一句話改設計（`assistant.js`，工具呼叫修改專案）、圖片辨識平面圖 |
 | `js/version.js` | 版本號與版本紀錄（網站更新提示依此判斷） |
 
 單位慣例：平面圖以公分為單位、y 軸向下；3D 以公尺為單位（`S = 0.01`），平面 x 對應 3D x、平面 y 對應 3D z。

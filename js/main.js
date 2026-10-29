@@ -12,6 +12,7 @@ import { detectRooms, polygonArea, polygonCentroid, pointInPolygon, wallLength, 
 import { nearestWall, roomAt, wallOnRoom, wallSideToward, scaleProject } from './core/model.js';
 import { autoDesign, analyzeRooms, ROOM_TYPES } from './ai/designer.js';
 import * as claude from './ai/claude.js';
+import { DesignAssistant } from './ai/assistant.js';
 import { VERSION, CHANGELOG, compareVersions } from './version.js';
 import { Updater } from './core/updater.js';
 import { mountPano, panoViewerHTML } from './editor/pano-viewer.js';
@@ -48,6 +49,7 @@ class App {
     this.plan = new Plan2D($('#planCanvas'), this);
     this.view3d = new View3D($('#view3d'), this);
     this.setupLive();
+    this.setupAssistant();
     this.selectedStyle = null;
     this.catFilter = 'all';
     this.buildCatalogUI();
@@ -944,6 +946,7 @@ class App {
         topView: () => this.view3d.topView(),
         walk: () => this.toggleWalk(),
         render: () => this.openRender(),
+        assistant: () => this.toggleAssistant(),
         live: () => { const l = this.view3d.live; l.setEnabled(!l.enabled); toast(l.enabled ? '實景模式已開啟：停止操作約 1 秒後，畫面會逐漸算成照片' : '實景模式已關閉'); },
         vr: () => this.toggleVR(),
         night: () => { store.update((p) => { p.settings.night = !p.settings.night; }, 'settings'); this.syncToggles(); },
@@ -956,6 +959,108 @@ class App {
   }
 
   isMode(m) { return $('#views').classList.contains(`mode-${m}`); }
+
+  // 一句話改設計：輸入或說出想要的修改，Claude 透過工具直接修改設計
+  setupAssistant() {
+    const panel = $('#aiChat'), log = $('#aiChatLog'), form = $('#aiChatForm'), input = $('#aiChatText');
+    const send = $('#aiChatSend'), mic = $('#aiChatMic');
+    this.assistant = new DesignAssistant();
+    const EXAMPLES = ['沙發移到窗邊', '客廳地板換成胡桃木', '主臥加一張書桌', '整間改成日式無印風', '晚上開燈看看'];
+    const showExamples = () => {
+      if (log.children.length) return;
+      const box = document.createElement('div');
+      box.className = 'ai-examples';
+      box.innerHTML = EXAMPLES.map((t) => `<button type="button">${esc(t)}</button>`).join('');
+      box.addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) { input.value = b.textContent; form.requestSubmit(); } });
+      log.append(box);
+    };
+    const needKey = () => { const no = !claude.getApiKey(); $('#aiChatKey').hidden = !no; return no; };
+    $('#aiChatKeySave').addEventListener('click', () => {
+      const k = $('#aiChatKeyInput').value.trim();
+      if (!k) { toast('請輸入 API Key'); return; }
+      claude.setApiKey(k); needKey(); input.focus();
+    });
+    $('#aiChatClose').addEventListener('click', () => this.toggleAssistant(false));
+    input.addEventListener('keydown', (e) => { if (e.key === 'Escape') this.toggleAssistant(false); });
+    this.toggleAssistant = (on = panel.hidden) => {
+      panel.hidden = !on;
+      if (on) { needKey(); showExamples(); if (!this.isMobileLayout()) input.focus(); this.closeSheets?.(); }
+      else { this.assistantAbort?.abort(); }
+    };
+    const scroll = () => { log.scrollTop = log.scrollHeight; };
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const text = input.value.trim();
+      if (!text || this.assistant.busy) return;
+      if (needKey()) { toast('請先輸入 API Key'); return; }
+      log.querySelector('.ai-examples')?.remove();
+      input.value = '';
+      const u = document.createElement('div'); u.className = 'ai-msg-user'; u.textContent = text;
+      const bot = document.createElement('div'); bot.className = 'ai-msg-bot';
+      bot.innerHTML = '<ul class="ai-actions"></ul><div class="ai-text"></div>';
+      log.append(u, bot); scroll();
+      const acts = $('.ai-actions', bot), txt = $('.ai-text', bot);
+      send.disabled = true; send.textContent = '修改中…';
+      const ctrl = new AbortController();
+      this.assistantAbort = ctrl;
+      const undoDepth = store.undoStack.length;
+      const styleBefore = store.project.design.styleId;
+      try {
+        const { changed } = await this.assistant.run(text, {
+          signal: ctrl.signal,
+          onText: (t) => { txt.textContent += t; scroll(); },
+          onAction: (a) => {
+            const li = document.createElement('li');
+            if (!a.ok) li.className = 'err';
+            li.textContent = a.label;
+            if (a.warnings?.length) { const w = document.createElement('span'); w.className = 'warn'; w.textContent = a.warnings.join('；'); li.append(w); }
+            acts.append(li); scroll();
+          },
+        });
+        // 換了風格時，選單縮圖依新配色重新產生
+        if (store.project.design.styleId !== styleBefore) this.redrawIcons();
+        if (changed) {
+          const b = document.createElement('button');
+          b.className = 'btn small ai-undo'; b.textContent = '復原這次修改';
+          b.addEventListener('click', () => {
+            // 退回到這次指令之前的狀態（中間若有其他修改也一併退回）
+            while (store.undoStack.length > undoDepth) store.undo();
+            b.disabled = true; b.textContent = '已復原';
+            this.assistant.reset();
+          });
+          bot.append(b);
+        }
+      } catch (err) {
+        const d = document.createElement('div'); d.className = 'ai-err';
+        d.textContent = ctrl.signal.aborted ? '已停止。' : claude.describeError(err);
+        bot.append(d);
+        if (err?.status === 401) { $('#aiChatKey').hidden = false; $('#aiChatKeyInput').value = ''; }
+      } finally {
+        send.disabled = false; send.textContent = '送出';
+        this.assistantAbort = null;
+        scroll();
+      }
+    });
+    // 語音輸入（瀏覽器支援時顯示）
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (SR) {
+      mic.hidden = false;
+      let rec = null;
+      mic.addEventListener('click', () => {
+        if (rec) { rec.stop(); return; }
+        rec = new SR();
+        rec.lang = 'zh-TW'; rec.interimResults = true; rec.continuous = false;
+        mic.classList.add('on'); mic.textContent = '聆聽中';
+        rec.onresult = (ev) => { input.value = [...ev.results].map((r) => r[0].transcript).join(''); };
+        rec.onerror = (ev) => { if (ev.error === 'not-allowed') toast('請允許使用麥克風'); };
+        rec.onend = () => {
+          mic.classList.remove('on'); mic.textContent = '語音'; rec = null;
+          if (input.value.trim()) form.requestSubmit();
+        };
+        rec.start();
+      });
+    }
+  }
 
   // 實景模式：按鈕狀態與進度標籤
   setupLive() {
@@ -1432,6 +1537,7 @@ class App {
   bindKeys() {
     window.addEventListener('keydown', (e) => {
       if (isTyping(e)) return;
+      if (e.key === 'Escape' && !$('#aiChat').hidden) { this.toggleAssistant(false); return; }
       if (!$('#reportModal').hidden) { if (e.key === 'Escape') $('#reportModal').hidden = true; return; }
       if (!$('#renderModal').hidden) { if (e.key === 'Escape') this.closeRender(); return; }
       if (!$('#updateModal').hidden) { if (e.key === 'Escape') $('#updateModal').querySelector('[data-update="later"], [data-update="close"]')?.click(); return; }
@@ -1441,6 +1547,7 @@ class App {
         else { this.view3d.walk.keys.add(e.code); if (/^(Arrow|Key[WASDQE])/.test(e.code)) e.preventDefault(); }
         return;
       }
+      if (e.key === '/' && !ctrl) { e.preventDefault(); this.toggleAssistant(true); return; }
       if (ctrl && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? store.redo() : store.undo(); return; }
       if (ctrl && e.key.toLowerCase() === 'y') { e.preventDefault(); store.redo(); return; }
       if (ctrl && e.key.toLowerCase() === 'd') { e.preventDefault(); this.duplicate(); return; }
