@@ -1,10 +1,10 @@
 // 報價單：把預算清單排成可列印的報價單（報價總表、各房間或各工程類別明細、稅金、條款與簽章欄）。
 // 公司 Logo 存在瀏覽器（localStorage，所有專案共用），不放進專案檔。
-// 報價單資訊存在 project.settings.budget.quote = { company, taxId, companyAddr, contact, client, site, phone, terms, tax, pageBreak, photos, validDays }。
+// 報價單資訊存在 project.settings.budget.quote = { company, taxId, companyAddr, contact, client, clientTaxId, site, phone, terms, tax, pageBreak, photos, validDays }。
 import { TIERS } from './budget.js';
 
 export const QUOTE_DEFAULTS = {
-  company: '', taxId: '', companyAddr: '', contact: '', client: '', site: '', phone: '',
+  company: '', taxId: '', companyAddr: '', contact: '', client: '', clientTaxId: '', site: '', phone: '',
   terms: '1. 本報價單有效期限依上方日期計算，逾期請重新報價。\n2. 付款方式：簽約 30%、進場施工 40%、完工驗收 30%。\n3. 未列於本報價單的項目另行報價；現場丈量後數量如有差異，依實際數量計價。\n4. 單價含材料與施工，實際以簽約內容為準。',
   tax: true, pageBreak: true, photos: true, validDays: 30,
 };
@@ -63,7 +63,11 @@ export function quoteHTML(P, r, mode, notes = {}, logo = '') {
     return `${sub ? `<span class="sub">${esc(sub)}</span>` : ''}${n?.text ? `<div class="nt">${esc(n.text)}</div>` : ''}${o.photos && n?.photos?.length ? `<div class="ph">${n.photos.map((src) => `<img src="${src}" alt="">`).join('')}</div>` : ''}`;
   };
   const coInfo = [o.taxId && `統一編號：${esc(o.taxId)}`, o.companyAddr && `地址：${esc(o.companyAddr)}`].filter(Boolean).join('<br>');
-  const info = [['業主', o.client], ['案場地址', o.site], ['聯絡電話', o.phone], ['報價單位', o.company], ['報價人', o.contact]];
+  // 左欄業主與案場、右欄報價單位
+  const area = `約 ${r.area.toFixed(1)} 坪 · ${TIERS[r.tier]?.name || ''}價位`;
+  const left = [['工程名稱', name], ['業主', o.client], ...(o.clientTaxId ? [['業主統編', o.clientTaxId]] : []), ['聯絡電話', o.phone], ['案場地址', o.site]];
+  const right = [['報價單位', o.company], ['報價人', o.contact], ['室內坪數', area]];
+  const col = (rows) => `<div class="col">${rows.map(([k, v]) => `<div><b>${k}</b><span>${esc(v || '')}</span></div>`).join('')}</div>`;
 
   return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><title>${esc(name)} 報價單 ${no}</title>
 <style>
@@ -79,7 +83,8 @@ header .brand { display: flex; align-items: center; gap: 12px; }
 header .logo { max-height: 64px; max-width: 200px; object-fit: contain; }
 header .meta { text-align: right; font-size: 11px; color: #333; line-height: 1.6; }
 .info { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 24px; margin-bottom: 14px; }
-.info div { border-bottom: 1px solid #bbb; padding: 4px 0; display: flex; gap: 8px; }
+.info .col { display: grid; align-content: start; gap: 2px; }
+.info .col > div { border-bottom: 1px solid #bbb; padding: 4px 0; display: flex; gap: 8px; }
 .info b { width: 64px; flex: none; color: #444; font-weight: 600; }
 h2 { font-size: 14px; margin: 16px 0 6px; padding-left: 8px; border-left: 4px solid #111; }
 table { width: 100%; border-collapse: collapse; }
@@ -108,11 +113,7 @@ tr { break-inside: avoid; }
   <div class="brand">${logo ? `<img class="logo" src="${logo}" alt="${esc(o.company || 'Logo')}">` : ''}<div><div class="co">${esc(o.company || '')}</div>${coInfo ? `<div class="co-info">${coInfo}</div>` : ''}<h1>報價單</h1></div></div>
   <div class="meta">報價單號：${no}<br>報價日期：${dateText(today)}<br>有效期限：${dateText(until)}</div>
 </header>
-<div class="info">
-  <div><b>工程名稱</b><span>${esc(name)}</span></div>
-  ${info.map(([k, v]) => `<div><b>${k}</b><span>${esc(v || '')}</span></div>`).join('')}
-  <div><b>室內坪數</b><span>約 ${r.area.toFixed(1)} 坪 · ${TIERS[r.tier]?.name || ''}價位</span></div>
-</div>
+<div class="info">${col(left)}${col(right)}</div>
 
 <h2>報價總表（${mode === 'room' ? '依房間' : '依工程類別'}）</h2>
 <table>
