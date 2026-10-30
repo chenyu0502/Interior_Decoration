@@ -27,6 +27,7 @@ import { pickEncoder } from './editor/mp4-mux.js';
 import { longLink, shortLink, readShareFromUrl, getGithubToken, setGithubToken, siteUrl } from './core/share.js';
 import { makeQR, qrToCanvas } from './core/qrcode.js';
 import { computeBudget, budgetCSV, TIERS, GROUPS } from './editor/budget.js';
+import { quoteHTML, quoteOptions } from './editor/quote.js';
 import { ensureVariants, addVariant, switchVariant, renameVariant, deleteVariant, variantData, withVariant } from './core/variants.js';
 import { checkFengshui } from './editor/fengshui.js';
 import { checkClearance } from './editor/clearance.js';
@@ -1625,23 +1626,72 @@ class App {
     toast(`已新增「${c.name}」`);
   }
 
+  // 列印報價單：先顯示報價單設定（分組方式、業主與報價單位資訊、稅金、分頁、照片、說明條款），再開新視窗列印
   printBudget() {
-    const r = computeBudget(store.project), mode = this.budgetMode();
-    const fmt = (n) => Math.round(n).toLocaleString('zh-TW');
+    const card = $('#budgetModal .budget-card');
+    let el = $('#quotePanel');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'quotePanel';
+      el.className = 'quote-panel';
+      card.append(el);
+      el.addEventListener('click', (e) => {
+        const a = e.target.closest('[data-quote]')?.dataset.quote;
+        if (a === 'cancel') el.hidden = true;
+        else if (a === 'print') { this.saveQuoteForm(); el.hidden = true; this.openQuote(el.querySelector('input[name=qMode]:checked').value); }
+      });
+      el.addEventListener('change', () => this.saveQuoteForm());
+    }
+    const o = quoteOptions(store.project), mode = this.budgetMode();
+    const field = (k, label, ph = '') => `<label><span>${label}</span><input data-q="${k}" value="${esc(o[k])}" placeholder="${esc(ph)}"></label>`;
+    el.innerHTML = `
+      <div class="quote-box" role="dialog" aria-label="列印報價單">
+        <h3>列印報價單</h3>
+        <div class="quote-row"><span>分組方式</span>
+          <span class="seg budget-mode">
+            <label><input type="radio" name="qMode" value="room" ${mode === 'room' ? 'checked' : ''}><span>依房間</span></label>
+            <label><input type="radio" name="qMode" value="group" ${mode === 'group' ? 'checked' : ''}><span>依工程類別</span></label>
+          </span></div>
+        <div class="quote-grid">
+          ${field('client', '業主', '業主姓名')}${field('phone', '聯絡電話')}
+          ${field('site', '案場地址')}${field('company', '報價單位', '公司或工作室名稱')}
+          ${field('contact', '報價人')}
+          <label><span>有效天數</span><input data-q="validDays" type="number" min="1" max="365" value="${esc(o.validDays)}"></label>
+        </div>
+        <div class="quote-row checks">
+          <label class="check"><input type="checkbox" data-q="tax" ${o.tax ? 'checked' : ''}> 加計營業稅 5%</label>
+          <label class="check"><input type="checkbox" data-q="pageBreak" ${o.pageBreak ? 'checked' : ''}> 每個房間 / 類別從新的一頁開始</label>
+          <label class="check"><input type="checkbox" data-q="photos" ${o.photos ? 'checked' : ''}> 附上備註照片</label>
+        </div>
+        <label class="quote-terms"><span>報價說明（付款方式、注意事項）</span><textarea data-q="terms" rows="4">${esc(o.terms)}</textarea></label>
+        <div class="quote-foot">
+          <button type="button" class="btn" data-quote="cancel">取消</button>
+          <button type="button" class="btn primary" data-quote="print">列印報價單</button>
+        </div>
+      </div>`;
+    el.hidden = false;
+  }
+
+  saveQuoteForm() {
+    const el = $('#quotePanel');
+    if (!el) return;
+    const q = {};
+    for (const i of el.querySelectorAll('[data-q]')) {
+      const k = i.dataset.q;
+      q[k] = i.type === 'checkbox' ? i.checked : k === 'validDays' ? Math.min(365, Math.max(1, Number(i.value) || 30)) : i.value.trim().slice(0, k === 'terms' ? 2000 : 80);
+    }
+    store.update((p) => { p.settings.budget = { ...(p.settings.budget || {}), quote: q }; }, 'settings');
+  }
+
+  openQuote(mode) {
+    const P = store.project;
+    const html = quoteHTML(P, computeBudget(P), mode, P.budgetNotes || {});
     const w = window.open('', '_blank');
     if (!w) { toast('瀏覽器擋住了列印視窗，請允許彈出視窗後再試'); return; }
-    w.document.write(`<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><title>${esc(store.project.name || '室內設計')} 預算與材料清單</title>
-      <style>body{font-family:"Microsoft JhengHei","PingFang TC","Noto Sans TC",sans-serif;padding:24px;color:#111}h1{font-size:20px;margin:0 0 4px}p{color:#555;margin:0 0 14px;font-size:12px}
-      table{width:100%;border-collapse:collapse;font-size:12px}th,td{border-bottom:1px solid #ddd;padding:5px 6px;text-align:left;vertical-align:top}.n{text-align:right}.g th{background:#f3f4f6}
-      small{color:#666}.note{margin-top:3px;color:#333;font-size:11px;white-space:pre-wrap}.ph{display:flex;gap:4px;flex-wrap:wrap;margin-top:3px}.ph img{height:72px;border-radius:3px}tr{break-inside:avoid}tfoot td{font-weight:700;font-size:14px;border-top:2px solid #111}</style></head><body>
-      <h1>${esc(store.project.name || '室內設計')} 預算與材料清單</h1>
-      <p>${mode === 'room' ? '依房間分組 · ' : ''}${TIERS[r.tier].name}價位 · 室內約 ${r.area.toFixed(1)} 坪 · 單價為台灣市場大略行情（含材料與施工），實際以廠商報價為準</p>
-      <table><thead><tr><th>項目</th><th class="n">數量</th><th>單位</th><th class="n">單價</th><th class="n">小計</th></tr></thead>
-      ${(mode === 'room' ? r.rooms : r.groups).map((g) => `<tbody><tr class="g"><th colspan="4">${esc(g.name)}</th><th class="n">${fmt(g.subtotal)}</th></tr>${g.lines.filter((l) => l.on).map((l) => `<tr><td>${esc(l.name)}${mode === 'room' ? `<br><small>${esc(l.group)}</small>` : l.details.length ? `<br><small>${esc(l.details.join('、'))}</small>` : ''}${printNote(this.noteOf(l.key))}</td><td class="n">${Number.isInteger(l.qty) ? l.qty : l.qty.toFixed(2)}</td><td>${l.unit}</td><td class="n">${fmt(l.price)}</td><td class="n">${fmt(l.amount)}</td></tr>`).join('')}</tbody>`).join('')}
-      <tfoot><tr><td colspan="4">總計（每坪約 ${fmt(r.perPing)} 元）</td><td class="n">${fmt(r.total)}</td></tr></tfoot></table></body></html>`);
+    w.document.write(html);
     w.document.close();
     w.focus();
-    setTimeout(() => w.print(), 300);
+    setTimeout(() => w.print(), 400);
   }
 
   // ------------------------------------------------------------ 分享連結與 QR code
@@ -2426,7 +2476,13 @@ class App {
       if (!$('#renderModal').hidden) { if (e.key === 'Escape') this.closeRender(); return; }
       if (!$('#tourModal').hidden) { if (e.key === 'Escape') this.closeTour(); return; }
       if (!$('#shareModal').hidden) { if (e.key === 'Escape') $('#shareModal').hidden = true; return; }
-      if (!$('#budgetModal').hidden) { if (e.key === 'Escape') $('#budgetModal').hidden = true; return; }
+      if (!$('#budgetModal').hidden) {
+        if (e.key === 'Escape') {
+          const pv = $('#budgetModal .photo-view'), qp = $('#quotePanel');
+          if (pv) pv.remove(); else if (qp && !qp.hidden) qp.hidden = true; else $('#budgetModal').hidden = true;
+        }
+        return;
+      }
       if (!$('#variantModal').hidden) { if (e.key === 'Escape') $('#variantModal').hidden = true; return; }
       if (!$('#updateModal').hidden) { if (e.key === 'Escape') $('#updateModal').querySelector('[data-update="later"], [data-update="close"]')?.click(); return; }
       const ctrl = e.ctrlKey || e.metaKey;
@@ -2517,4 +2573,3 @@ async function shrinkPhoto(file) {
   bmp.close?.();
   return c.toDataURL('image/jpeg', 0.72);
 }
-const printNote = (n) => (n ? `${n.text ? `<div class="note">${esc(n.text)}</div>` : ''}${n.photos?.length ? `<div class="ph">${n.photos.map((src) => `<img src="${src}">`).join('')}</div>` : ''}` : '');
