@@ -5,9 +5,16 @@
 //   次版號：新增功能
 //   修訂號：錯誤修正
 
-export const VERSION = '1.36.1';
+export const VERSION = '1.36.2';
 
 export const CHANGELOG = [
+  {
+    version: '1.36.2',
+    date: '2026-10-30',
+    notes: [
+      '2D、3D 畫面的工具按鈕換行時讓出左上角的標籤位置，「3D 透視圖」標籤不再被按鈕蓋住。',
+    ],
+  },
   {
     version: '1.36.1',
     date: '2026-10-30',
