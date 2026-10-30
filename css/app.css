@@ -58,12 +58,20 @@ input, select, textarea { font: inherit; color: inherit; }
 .seg button.active { background: var(--accent); color: #fff; }
 
 .menu { position: relative; }
-.menu-pop { display: none; position: absolute; top: 110%; left: 0; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); padding: 6px; min-width: 240px; z-index: 50; }
-.menu.open .menu-pop { display: block; }
+/* 檔案選單：寬螢幕分成左右兩欄，避免高度超出畫面；仍然太矮時可捲動 */
+.menu-pop { display: none; position: absolute; top: 110%; left: 0; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); padding: 6px; min-width: 240px; z-index: 50; max-height: calc(100vh - 70px); max-height: calc(100dvh - 70px); overflow-y: auto; overscroll-behavior: contain; }
+.menu.open .menu-pop { display: grid; grid-template-columns: repeat(2, minmax(240px, auto)); gap: 0 6px; }
+.menu-col { min-width: 0; }
+.menu-col + .menu-col { border-left: 1px solid var(--line); padding-left: 6px; }
+@media (max-width: 640px) {
+  .menu.open .menu-pop { grid-template-columns: 1fr; width: min(320px, calc(100vw - 16px)); }
+  .menu-col + .menu-col { border-left: 0; padding-left: 0; border-top: 1px solid var(--line); margin-top: 4px; }
+}
 .menu-pop button { display: block; width: 100%; text-align: left; background: none; border: 0; padding: 7px 10px; border-radius: 6px; }
 .menu-pop button:hover { background: var(--panel-2); }
 .menu-pop hr { border: 0; border-top: 1px solid var(--line); margin: 5px 0; }
 .menu-sub-title { font-size: 11px; color: var(--muted); padding: 6px 10px 2px; }
+.menu-col > .menu-sub-title:first-child { padding-top: 2px; }
 
 /* ---------- 主版面 */
 .layout { flex: 1; display: grid; grid-template-columns: 280px 1fr 280px; min-height: 0; }
