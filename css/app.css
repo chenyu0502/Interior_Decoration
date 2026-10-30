@@ -389,6 +389,22 @@ input, select, textarea { font: inherit; color: inherit; }
 .budget-table tr.off td:not(.b-on) { color: var(--muted); text-decoration: line-through; }
 .budget-table tr.off td .hint, .budget-table tr.off input { text-decoration: none; opacity: .6; }
 .budget-table td input[data-qty] { width: 64px; }
+.b-note-sum { margin-top: 2px; font-size: 11px; display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; }
+.b-note-btn { border: 0; background: none; padding: 0; color: var(--muted); font-size: 11px; cursor: pointer; }
+.b-note-btn.has { color: var(--accent); font-weight: 600; }
+.b-note-text { color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 360px; }
+.budget-table tr.off .b-note-sum { text-decoration: none; }
+.budget-table tr.b-note-row td { background: rgba(37,99,235,.03); }
+.b-note-row textarea { width: 100%; box-sizing: border-box; font: inherit; font-size: 13px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--text); resize: vertical; }
+.b-photos { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.b-photos figure { position: relative; margin: 0; }
+.b-photos img { display: block; height: 72px; max-width: 120px; object-fit: cover; border-radius: 6px; cursor: zoom-in; border: 1px solid var(--line); }
+.b-photos figure .icon-btn { position: absolute; top: 2px; right: 2px; width: 20px; height: 20px; font-size: 11px; background: rgba(255,255,255,.9); }
+.b-photo-add { display: grid; place-items: center; width: 72px; height: 72px; border: 1px dashed var(--line); border-radius: 6px; color: var(--muted); font-size: 12px; cursor: pointer; }
+.b-photo-add:hover { border-color: var(--accent); color: var(--accent); }
+.photo-view { position: absolute; inset: 0; z-index: 20; background: rgba(15,17,21,.86); display: grid; place-items: center; cursor: zoom-out; border-radius: inherit; }
+.photo-view img { max-width: 94%; max-height: 90%; border-radius: 8px; }
+.photo-view .icon-btn { position: absolute; top: 12px; right: 12px; background: #fff; }
 .budget-add { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 12px; padding: 10px; border: 1px dashed var(--line); border-radius: 8px; font-size: 13px; }
 .budget-add input, .budget-add select { font: inherit; padding: 3px 6px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); color: var(--text); }
 .budget-add #bAddName { flex: 1 1 180px; min-width: 0; }

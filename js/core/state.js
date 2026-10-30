@@ -39,8 +39,8 @@ class Store {
   }
 
   snapshot() {
-    const { background, ...rest } = this.project;
-    // 底圖影像太大不放進復原紀錄，只記錄位置與比例
+    const { background, budgetNotes, ...rest } = this.project;
+    // 底圖影像太大不放進復原紀錄，只記錄位置與比例；預算備註與照片不列入復原
     if (background) rest._bg = { x: background.x || 0, y: background.y || 0, scale: background.scale };
     return JSON.stringify(rest);
   }
@@ -66,10 +66,10 @@ class Store {
     this.scheduleSave();
   }
   restore(json) {
-    const bg = this.project.background;
+    const bg = this.project.background, notes = this.project.budgetNotes;
     const { _bg, ...data } = JSON.parse(json);
     if (bg && _bg) Object.assign(bg, _bg);
-    this.project = { ...data, background: bg };
+    this.project = { ...data, background: bg, budgetNotes: notes };
     if (this.selection && !this.find(this.selection.type, this.selection.id)) this.select(null);
     this.changed('history');
   }
@@ -166,12 +166,18 @@ class Store {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(this.project));
     } catch (e) {
-      // 背景圖過大時改為不含背景存檔
+      // 容量不足時依序改為不含背景圖、不含預算照片存檔
+      const { background, ...rest } = this.project;
       try {
-        const { background, ...rest } = this.project;
         localStorage.setItem(STORAGE_KEY, JSON.stringify(rest));
         this.emit('toast', '背景圖過大，自動存檔不包含背景圖（請用「儲存檔案」匯出）');
-      } catch { /* 無法存檔 */ }
+      } catch {
+        try {
+          const notes = Object.fromEntries(Object.entries(rest.budgetNotes || {}).map(([k, n]) => [k, { ...n, photos: [] }]));
+          localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...rest, budgetNotes: notes }));
+          this.emit('toast', '照片過多，自動存檔不包含背景圖與預算照片（請用「儲存專案檔」匯出）');
+        } catch { /* 無法存檔 */ }
+      }
     }
   }
   loadLocal() {

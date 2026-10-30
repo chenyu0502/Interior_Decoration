@@ -1467,10 +1467,18 @@ class App {
         const del = e.target.closest('[data-del-custom]');
         if (del) this.editBudget((B) => { B.custom = (B.custom || []).filter((c) => c.id !== del.dataset.delCustom); });
         if (a === 'add') this.addBudgetItem();
+        const nb = e.target.closest('[data-note-toggle]');
+        if (nb) { const k = nb.dataset.noteToggle; if (this.budgetOpen.has(k)) this.budgetOpen.delete(k); else this.budgetOpen.add(k); this.renderBudget(); }
+        const ph = e.target.closest('[data-photo-del]');
+        if (ph) { const [k, i] = [ph.dataset.photoDel, Number(ph.dataset.i)]; this.editNote(k, (n) => { n.photos.splice(i, 1); }); return; }
+        const img = e.target.closest('.b-photos img');
+        if (img) this.viewPhoto(img.src);
       });
       m.addEventListener('change', (e) => {
         const t = e.target;
         if (t.id === 'bTier') this.editBudget((B) => { B.tier = t.value; });
+        else if (t.dataset.noteText) this.editNote(t.dataset.noteText, (n) => { n.text = t.value.trim().slice(0, 1000); });
+        else if (t.dataset.notePhoto) { this.addNotePhotos(t.dataset.notePhoto, [...t.files]); t.value = ''; }
         else if (t.name === 'bMode') { try { localStorage.setItem('interior-studio:budget-mode', t.value); } catch { /* 無痕模式 */ } this.renderBudget(); }
         else if (t.id === 'bCeiling') this.editBudget((B) => { B.ceiling = t.checked; });
         else if (t.dataset.on) {
@@ -1492,8 +1500,62 @@ class App {
         }
       });
     }
+    this.budgetOpen = this.budgetOpen || new Set();
     m.hidden = false;
     this.renderBudget();
+  }
+
+  // ---- 預算項目的備註與照片：存在 project.budgetNotes（各方案共用、不列入復原），依項目鍵對應
+  noteOf(key) { return store.project.budgetNotes?.[key] || null; }
+
+  // 項目名稱下方：備註按鈕與摘要
+  budgetNoteCell(key) {
+    const n = this.noteOf(key), open = this.budgetOpen?.has(key);
+    const cnt = n?.photos?.length || 0;
+    const label = n?.text || cnt ? `備註${cnt ? ` · ${cnt} 張照片` : ''}` : '＋ 備註 / 照片';
+    return `<div class="b-note-sum"><button type="button" class="b-note-btn ${n?.text || cnt ? 'has' : ''}" data-note-toggle="${esc(key)}" aria-expanded="${open ? 'true' : 'false'}">${label} ${open ? '▴' : '▾'}</button>${n?.text && !open ? `<span class="b-note-text">${esc(n.text)}</span>` : ''}</div>`;
+  }
+
+  // 展開的備註列：文字、照片縮圖、加入照片
+  budgetNoteRow(key) {
+    if (!this.budgetOpen?.has(key)) return '';
+    const n = this.noteOf(key) || {}, photos = n.photos || [];
+    return `<tr class="b-note-row"><td></td><td colspan="5">
+      <textarea data-note-text="${esc(key)}" rows="2" maxlength="1000" placeholder="例如：品牌型號、顏色、廠商報價、施工注意事項">${esc(n.text || '')}</textarea>
+      <div class="b-photos">${photos.map((src, i) => `<figure><img src="${src}" alt="照片 ${i + 1}" title="點一下放大"><button type="button" class="icon-btn" data-photo-del="${esc(key)}" data-i="${i}" title="刪除照片">✕</button></figure>`).join('')}
+        ${photos.length < NOTE_PHOTO_MAX ? `<label class="b-photo-add" title="加入照片（最多 ${NOTE_PHOTO_MAX} 張）">＋ 照片<input type="file" accept="image/*" multiple data-note-photo="${esc(key)}" hidden></label>` : ''}</div>
+    </td></tr>`;
+  }
+
+  editNote(key, fn) {
+    store.update((p) => {
+      const all = { ...(p.budgetNotes || {}) };
+      const n = { text: '', photos: [], ...(all[key] || {}) };
+      n.photos = [...(n.photos || [])];
+      fn(n);
+      if (!n.text && !n.photos.length) delete all[key]; else all[key] = n;
+      p.budgetNotes = all;
+    }, 'settings');
+    this.renderBudget();
+  }
+
+  async addNotePhotos(key, files) {
+    const room = NOTE_PHOTO_MAX - (this.noteOf(key)?.photos?.length || 0);
+    const list = files.filter((f) => f.type.startsWith('image/')).slice(0, Math.max(0, room));
+    if (files.length > list.length) toast(`每個項目最多 ${NOTE_PHOTO_MAX} 張照片`);
+    const out = [];
+    for (const f of list) {
+      try { out.push(await shrinkPhoto(f)); } catch { toast(`無法讀取「${f.name}」`); }
+    }
+    if (out.length) this.editNote(key, (n) => { n.photos.push(...out); });
+  }
+
+  viewPhoto(src) {
+    const v = document.createElement('div');
+    v.className = 'photo-view';
+    v.innerHTML = `<img src="${src}" alt="照片"><button type="button" class="icon-btn" title="關閉">✕</button>`;
+    v.addEventListener('click', () => v.remove());
+    $('#budgetModal').append(v);
   }
 
   editBudget(fn) {
@@ -1533,11 +1595,11 @@ class App {
           <tr class="bg"><th colspan="5">${esc(g.name)}${mode === 'room' && r.total ? ` <span class="hint">${Math.round((g.subtotal / r.total) * 100)}%</span>` : ''}</th><th class="n">${fmt(g.subtotal)}</th></tr>
           ${g.lines.map((l) => `<tr class="${l.on ? '' : 'off'}">
             <td class="b-on"><input type="checkbox" data-on="${esc(l.key)}" ${l.on ? 'checked' : ''} aria-label="${esc(l.name)}要做" title="取消勾選表示不做，不列入總計"></td>
-            <td>${esc(l.name)}${l.custom ? ` <button type="button" class="icon-btn" data-del-custom="${esc(l.key.slice(7))}" title="刪除這個自訂工程">✕</button>` : ''}${mode === 'room' ? `<div class="hint">${esc(l.group)}</div>` : l.details.length ? `<div class="hint">${esc(l.details.join('、'))}</div>` : ''}</td>
+            <td>${esc(l.name)}${l.custom ? ` <button type="button" class="icon-btn" data-del-custom="${esc(l.key.slice(7))}" title="刪除這個自訂工程">✕</button>` : ''}${mode === 'room' ? `<div class="hint">${esc(l.group)}</div>` : l.details.length ? `<div class="hint">${esc(l.details.join('、'))}</div>` : ''}${this.budgetNoteCell(l.key)}</td>
             <td class="n">${l.custom ? `<input type="number" min="0" step="1" data-qty="${esc(l.key)}" value="${l.qty}" aria-label="${esc(l.name)}數量">` : num(l.qty)}${l.waste ? `<div class="hint">含損耗 ${Math.round(l.waste * 100)}%</div>` : ''}</td>
             <td>${esc(l.unit)}</td>
             <td class="n"><input type="number" min="0" step="100" data-price="${esc(l.key)}" value="${l.price}" aria-label="${esc(l.name)}單價">${Number.isFinite(B.prices?.[l.key]) ? `<button type="button" class="icon-btn" data-reset="${esc(l.key)}" title="恢復預設單價">↺</button>` : ''}</td>
-            <td class="n">${l.on ? fmt(l.amount) : '不做'}</td></tr>`).join('')}
+            <td class="n">${l.on ? fmt(l.amount) : '不做'}</td></tr>${this.budgetNoteRow(l.key)}`).join('')}
         </tbody>`).join('')}
       </table>
       <div class="budget-add">
@@ -1571,11 +1633,11 @@ class App {
     w.document.write(`<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><title>${esc(store.project.name || '室內設計')} 預算與材料清單</title>
       <style>body{font-family:"Microsoft JhengHei","PingFang TC","Noto Sans TC",sans-serif;padding:24px;color:#111}h1{font-size:20px;margin:0 0 4px}p{color:#555;margin:0 0 14px;font-size:12px}
       table{width:100%;border-collapse:collapse;font-size:12px}th,td{border-bottom:1px solid #ddd;padding:5px 6px;text-align:left;vertical-align:top}.n{text-align:right}.g th{background:#f3f4f6}
-      small{color:#666}tfoot td{font-weight:700;font-size:14px;border-top:2px solid #111}</style></head><body>
+      small{color:#666}.note{margin-top:3px;color:#333;font-size:11px;white-space:pre-wrap}.ph{display:flex;gap:4px;flex-wrap:wrap;margin-top:3px}.ph img{height:72px;border-radius:3px}tr{break-inside:avoid}tfoot td{font-weight:700;font-size:14px;border-top:2px solid #111}</style></head><body>
       <h1>${esc(store.project.name || '室內設計')} 預算與材料清單</h1>
       <p>${mode === 'room' ? '依房間分組 · ' : ''}${TIERS[r.tier].name}價位 · 室內約 ${r.area.toFixed(1)} 坪 · 單價為台灣市場大略行情（含材料與施工），實際以廠商報價為準</p>
       <table><thead><tr><th>項目</th><th class="n">數量</th><th>單位</th><th class="n">單價</th><th class="n">小計</th></tr></thead>
-      ${(mode === 'room' ? r.rooms : r.groups).map((g) => `<tbody><tr class="g"><th colspan="4">${esc(g.name)}</th><th class="n">${fmt(g.subtotal)}</th></tr>${g.lines.filter((l) => l.on).map((l) => `<tr><td>${esc(l.name)}${mode === 'room' ? `<br><small>${esc(l.group)}</small>` : l.details.length ? `<br><small>${esc(l.details.join('、'))}</small>` : ''}</td><td class="n">${Number.isInteger(l.qty) ? l.qty : l.qty.toFixed(2)}</td><td>${l.unit}</td><td class="n">${fmt(l.price)}</td><td class="n">${fmt(l.amount)}</td></tr>`).join('')}</tbody>`).join('')}
+      ${(mode === 'room' ? r.rooms : r.groups).map((g) => `<tbody><tr class="g"><th colspan="4">${esc(g.name)}</th><th class="n">${fmt(g.subtotal)}</th></tr>${g.lines.filter((l) => l.on).map((l) => `<tr><td>${esc(l.name)}${mode === 'room' ? `<br><small>${esc(l.group)}</small>` : l.details.length ? `<br><small>${esc(l.details.join('、'))}</small>` : ''}${printNote(this.noteOf(l.key))}</td><td class="n">${Number.isInteger(l.qty) ? l.qty : l.qty.toFixed(2)}</td><td>${l.unit}</td><td class="n">${fmt(l.price)}</td><td class="n">${fmt(l.amount)}</td></tr>`).join('')}</tbody>`).join('')}
       <tfoot><tr><td colspan="4">總計（每坪約 ${fmt(r.perPing)} 元）</td><td class="n">${fmt(r.total)}</td></tr></tfoot></table></body></html>`);
     w.document.close();
     w.focus();
@@ -2443,3 +2505,16 @@ window.app = new App();
 
 // 風格名稱（方案對照用）
 const STYLE_NAME = (id) => STYLE_MAP[id]?.name || '未指定風格';
+
+// 預算備註照片：縮小到長邊 800px 的 JPEG，避免專案檔與自動存檔過大
+const NOTE_PHOTO_MAX = 6;
+async function shrinkPhoto(file) {
+  const bmp = await createImageBitmap(file);
+  const k = Math.min(1, 800 / Math.max(bmp.width, bmp.height));
+  const c = document.createElement('canvas');
+  c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k);
+  c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+  bmp.close?.();
+  return c.toDataURL('image/jpeg', 0.72);
+}
+const printNote = (n) => (n ? `${n.text ? `<div class="note">${esc(n.text)}</div>` : ''}${n.photos?.length ? `<div class="ph">${n.photos.map((src) => `<img src="${src}">`).join('')}</div>` : ''}` : '');

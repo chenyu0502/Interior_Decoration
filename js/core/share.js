@@ -18,6 +18,8 @@ export function sharePayload(project) {
   const { background, ...rest } = project;
   // 方案的縮圖是圖片，不放進分享資料
   if (Array.isArray(rest.variants)) rest.variants = rest.variants.map(({ thumb, ...v }) => v);
+  // 預算備註只帶文字，不帶照片
+  if (rest.budgetNotes) rest.budgetNotes = Object.fromEntries(Object.entries(rest.budgetNotes).filter(([, n]) => n.text).map(([k, n]) => [k, { text: n.text }]));
   return rest;
 }
 

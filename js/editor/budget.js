@@ -2,6 +2,7 @@
 // 單價為台灣市場的大略行情（新台幣，材料與施工合計），僅供參考，使用者可以逐項修改。
 // 設定存在 project.settings.budget = { tier, prices: { 項目鍵: 單價 }, extras: { 編號: true/false }, ceiling,
 //   off: { 項目鍵: true }（不做的項目）, custom: [{ id, group, name, unit, qty, price }]（自訂工程） }。
+// 各項目的備註與照片存在 project.budgetNotes = { 項目鍵: { text, photos: [dataURL] } }（各方案共用）。
 import { store } from '../core/state.js';
 import { wallFrame, pointInPolygon, polygonArea, PING } from '../core/geometry.js';
 import { openingCenter } from '../core/model.js';
@@ -228,9 +229,9 @@ function openingRooms(P, rooms) {
 export function budgetCSV(P = store.project, mode = 'group') {
   const r = computeBudget(P);
   const q = (v) => `"${String(v).replace(/"/g, '""')}"`;
-  const rows = [[mode === 'room' ? '房間' : '類別', '項目', '數量', '單位', '損耗', '單價（元）', '小計（元）', mode === 'room' ? '類別' : '說明']];
+  const rows = [[mode === 'room' ? '房間' : '類別', '項目', '數量', '單位', '損耗', '單價（元）', '小計（元）', mode === 'room' ? '類別' : '說明', '備註', '照片']];
   for (const g of mode === 'room' ? r.rooms : r.groups) {
-    for (const l of g.lines.filter((x) => x.on)) rows.push([g.name, l.name, l.qty, l.unit, l.waste ? `${Math.round(l.waste * 100)}%` : '', l.price, l.amount, mode === 'room' ? l.group : l.details.join('、')]);
+    for (const l of g.lines.filter((x) => x.on)) rows.push([g.name, l.name, l.qty, l.unit, l.waste ? `${Math.round(l.waste * 100)}%` : '', l.price, l.amount, mode === 'room' ? l.group : l.details.join('、'), P.budgetNotes?.[l.key]?.text || '', P.budgetNotes?.[l.key]?.photos?.length ? `${P.budgetNotes[l.key].photos.length} 張` : '']);
     rows.push([g.name, '小計', '', '', '', '', g.subtotal, '']);
   }
   rows.push(['', '總計', '', '', '', '', r.total, `室內約 ${r.area.toFixed(1)} 坪，每坪約 ${r.perPing} 元`]);
