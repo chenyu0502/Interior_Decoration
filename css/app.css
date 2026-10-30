@@ -153,6 +153,18 @@ input, select, textarea { font: inherit; color: inherit; }
 .light-lamp { display: flex; align-items: center; gap: 6px; }
 .light-lamp input[type=range] { width: 90px; margin-left: auto; }
 .light-list > .hint { flex-basis: 100%; }
+.view-tools .btn.on#fsBtn { background: #7c3aed; border-color: #7c3aed; }
+.fs-score { font-weight: 700; padding: 1px 10px; border-radius: 999px; color: #fff; font-size: 12px; }
+.fs-score.fs-good { background: #16a34a; } .fs-score.fs-ok { background: #d97706; } .fs-score.fs-bad { background: #dc2626; }
+.fs-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 8px; margin-top: 6px; max-height: 26vh; overflow-y: auto; }
+.fs-card { border: 1px solid var(--line); border-left: 4px solid #d97706; border-radius: 8px; padding: 6px 10px; cursor: pointer; line-height: 1.55; }
+.fs-card.warn { border-left-color: #dc2626; }
+.fs-card.on { box-shadow: 0 0 0 2px #7c3aed inset; }
+.fs-card p { margin: 3px 0 0; }
+.fs-card .fs-fix { color: #166534; }
+.fs-head { display: flex; align-items: center; gap: 6px; }
+.fs-tag { font-size: 11px; color: #fff; background: #d97706; border-radius: 4px; padding: 0 6px; flex: none; }
+.fs-card.warn .fs-tag { background: #dc2626; }
 
 /* ---------- 一句話改設計 */
 .ai-chat { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); width: min(640px, calc(100% - 24px)); z-index: 6; background: var(--panel, #fff); color: var(--text, #1f2937); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 10px 30px rgba(0,0,0,.18); display: flex; flex-direction: column; max-height: min(70%, 560px); }

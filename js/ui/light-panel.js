@@ -63,7 +63,7 @@ export class LightPanel {
     this.el.hidden = !on;
     $('#nightBtn')?.classList.toggle('on', on);
     if (on) {
-      if (this.app.sunPanel?.active) this.app.sunPanel.toggle(false);
+      this.app.closeDocks?.(this);
       try { this.setList(localStorage.getItem('interior-studio:light-list') === '1', true); } catch { this.setList(false, true); }
       this.dock(true);
       this.render();
@@ -75,7 +75,7 @@ export class LightPanel {
     const views = $('#views');
     if (!on) {
       this.ro?.disconnect(); this.ro = null;
-      if (!this.app.sunPanel?.active) { views.classList.remove('sun-open'); views.style.removeProperty('--sun-h'); }
+      if (!this.app.anyDockOpen?.()) { views.classList.remove('sun-open'); views.style.removeProperty('--sun-h'); }
       return;
     }
     views.classList.add('sun-open');

@@ -696,6 +696,9 @@ export class Plan2D {
       ctx.restore();
     }
 
+    // 最上層的疊加圖層（風水檢查的標示等）
+    this.overlayTop?.(ctx, lw);
+
     // 文字標籤（螢幕座標）
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
