@@ -1,10 +1,10 @@
 // 報價單：把預算清單排成可列印的報價單（報價總表、各房間或各工程類別明細、稅金、條款與簽章欄）。
 // 公司 Logo 存在瀏覽器（localStorage，所有專案共用），不放進專案檔。
-// 報價單資訊存在 project.settings.budget.quote = { company, taxId, companyAddr, contact, client, clientTaxId, clientEmail, site, phone, terms, tax, pageBreak, photos, validDays }。
+// 報價單資訊存在 project.settings.budget.quote = { company, taxId, companyAddr, companyPhone, companyMobile, lineId, wechat, contact, client, clientTaxId, clientEmail, site, phone, terms, tax, pageBreak, photos, validDays }。
 import { TIERS } from './budget.js';
 
 export const QUOTE_DEFAULTS = {
-  company: '', taxId: '', companyAddr: '', contact: '', client: '', clientTaxId: '', clientEmail: '', site: '', phone: '',
+  company: '', taxId: '', companyAddr: '', companyPhone: '', companyMobile: '', lineId: '', wechat: '', contact: '', client: '', clientTaxId: '', clientEmail: '', site: '', phone: '',
   terms: '1. 本報價單有效期限依上方日期計算，逾期請重新報價。\n2. 付款方式：簽約 30%、進場施工 40%、完工驗收 30%。\n3. 未列於本報價單的項目另行報價；現場丈量後數量如有差異，依實際數量計價。\n4. 單價含材料與施工，實際以簽約內容為準。',
   tax: true, pageBreak: true, photos: true, validDays: 30,
 };
@@ -62,7 +62,14 @@ export function quoteHTML(P, r, mode, notes = {}, logo = '') {
     const sub = mode === 'room' ? l.group : '';
     return `${sub ? `<span class="sub">${esc(sub)}</span>` : ''}${n?.text ? `<div class="nt">${esc(n.text)}</div>` : ''}${o.photos && n?.photos?.length ? `<div class="ph">${n.photos.map((src) => `<img src="${src}" alt="">`).join('')}</div>` : ''}`;
   };
-  const coInfo = [o.taxId && `統一編號：${esc(o.taxId)}`, o.companyAddr && `地址：${esc(o.companyAddr)}`].filter(Boolean).join('<br>');
+  // 公司資訊：同類的放同一行（統編、地址、電話與手機、LINE 與 WeChat）
+  const line = (...xs) => xs.filter(([, v]) => v).map(([k, v]) => `${k}：${esc(v)}`).join('　');
+  const coInfo = [
+    line(['統一編號', o.taxId]),
+    line(['地址', o.companyAddr]),
+    line(['電話', o.companyPhone], ['手機', o.companyMobile]),
+    line(['LINE ID', o.lineId], ['WeChat', o.wechat]),
+  ].filter(Boolean).join('<br>');
   // 左欄業主與案場、右欄報價單位
   const area = `約 ${r.area.toFixed(1)} 坪 · ${TIERS[r.tier]?.name || ''}價位`;
   const left = [['工程名稱', name], ['業主', o.client], ...(o.clientTaxId ? [['業主統編', o.clientTaxId]] : []), ['聯絡電話', o.phone], ...(o.clientEmail ? [['電子郵件', o.clientEmail]] : []), ['案場地址', o.site]];

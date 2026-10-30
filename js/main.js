@@ -1686,6 +1686,9 @@ class App {
           ${field('site', '案場地址')}${field('company', '報價單位', '公司或工作室名稱')}
           <label><span>公司統一編號</span><input data-q="taxId" value="${esc(o.taxId)}" inputmode="numeric" maxlength="8" placeholder="8 碼數字"></label>
           ${field('companyAddr', '公司地址')}
+          <label><span>公司電話</span><input data-q="companyPhone" type="tel" value="${esc(o.companyPhone)}" placeholder="02-1234-5678"></label>
+          <label><span>手機</span><input data-q="companyMobile" type="tel" value="${esc(o.companyMobile)}" placeholder="0912-345-678"></label>
+          ${field('lineId', 'LINE ID')}${field('wechat', 'WeChat ID')}
           <div class="quote-logo"><span>公司 Logo</span>
             <div>${quoteLogo() ? `<img src="${quoteLogo()}" alt="公司 Logo">` : '<em>尚未設定</em>'}
               <label class="btn small">${quoteLogo() ? '更換' : '上傳'}<input type="file" accept="image/*" data-quote-logo hidden></label>
