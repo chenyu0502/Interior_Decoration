@@ -1459,7 +1459,7 @@ class App {
       m.addEventListener('click', (e) => {
         if (e.target === m || e.target.closest('[data-budget="close"]')) { m.hidden = true; return; }
         const a = e.target.closest('[data-budget]')?.dataset.budget;
-        if (a === 'csv') download(URL.createObjectURL(new Blob([budgetCSV(store.project)], { type: 'text/csv' })), `${store.project.name || '室內設計'}-預算與材料清單.csv`);
+        if (a === 'csv') download(URL.createObjectURL(new Blob([budgetCSV(store.project, this.budgetMode())], { type: 'text/csv' })), `${store.project.name || '室內設計'}-預算與材料清單${this.budgetMode() === 'room' ? '（依房間）' : ''}.csv`);
         else if (a === 'print') this.printBudget();
         else if (a === 'reset') { if (confirm('恢復所有預設單價？')) this.editBudget((B) => { B.prices = {}; }); }
         const reset = e.target.closest('[data-reset]');
@@ -1471,6 +1471,7 @@ class App {
       m.addEventListener('change', (e) => {
         const t = e.target;
         if (t.id === 'bTier') this.editBudget((B) => { B.tier = t.value; });
+        else if (t.name === 'bMode') { try { localStorage.setItem('interior-studio:budget-mode', t.value); } catch { /* 無痕模式 */ } this.renderBudget(); }
         else if (t.id === 'bCeiling') this.editBudget((B) => { B.ceiling = t.checked; });
         else if (t.dataset.on) {
           const k = t.dataset.on;
@@ -1505,22 +1506,34 @@ class App {
     this.renderBudget();
   }
 
+  // 清單顯示方式：依工程類別或依房間（瀏覽器偏好，不存在專案中）
+  budgetMode() {
+    try { return localStorage.getItem('interior-studio:budget-mode') === 'room' ? 'room' : 'group'; } catch { return 'group'; }
+  }
+
   renderBudget() {
     const P = store.project, B = P.settings.budget || {};
-    const r = computeBudget(P);
+    const r = computeBudget(P), mode = this.budgetMode();
+    const sections = mode === 'room' ? r.rooms : r.groups;
     const fmt = (n) => Math.round(n).toLocaleString('zh-TW');
     const num = (q) => (Number.isInteger(q) ? q : q.toFixed(2));
     $('#budgetOpts').innerHTML = `
+      <span class="seg budget-mode" role="radiogroup" aria-label="分組方式">
+        <label><input type="radio" name="bMode" value="group" ${mode === 'group' ? 'checked' : ''}><span>依工程類別</span></label>
+        <label><input type="radio" name="bMode" value="room" ${mode === 'room' ? 'checked' : ''}><span>依房間</span></label>
+      </span>
       <label>價位等級 <select id="bTier">${Object.entries(TIERS).map(([k, t]) => `<option value="${k}" ${r.tier === k ? 'selected' : ''}>${t.name}</option>`).join('')}</select></label>
-      <span class="hint">取消勾選「做」的項目不列入總計；水電、拆除、設計監工等在「其他工程」中勾選，也可以在最下方新增自訂工程。</span>`;
+      <span class="hint">${mode === 'room'
+        ? '依房間顯示時，同一個項目（例如同一種地板）分在各房間，勾選「做」或修改單價會套用到所有房間；水電、拆除等依全室坪數計價的工程列在「全室共用」。'
+        : '取消勾選「做」的項目不列入總計；水電、拆除、設計監工等在「其他工程」中勾選，也可以在最下方新增自訂工程。'}</span>`;
     $('#budgetBody').innerHTML = `
       <table class="budget-table">
         <thead><tr><th class="b-on">做</th><th>項目</th><th class="n">數量</th><th>單位</th><th class="n">單價（元）</th><th class="n">小計（元）</th></tr></thead>
-        ${r.groups.map((g) => `<tbody>
-          <tr class="bg"><th colspan="5">${esc(g.name)}</th><th class="n">${fmt(g.subtotal)}</th></tr>
+        ${sections.map((g) => `<tbody>
+          <tr class="bg"><th colspan="5">${esc(g.name)}${mode === 'room' && r.total ? ` <span class="hint">${Math.round((g.subtotal / r.total) * 100)}%</span>` : ''}</th><th class="n">${fmt(g.subtotal)}</th></tr>
           ${g.lines.map((l) => `<tr class="${l.on ? '' : 'off'}">
             <td class="b-on"><input type="checkbox" data-on="${esc(l.key)}" ${l.on ? 'checked' : ''} aria-label="${esc(l.name)}要做" title="取消勾選表示不做，不列入總計"></td>
-            <td>${esc(l.name)}${l.custom ? ` <button type="button" class="icon-btn" data-del-custom="${esc(l.key.slice(7))}" title="刪除這個自訂工程">✕</button>` : ''}${l.details.length ? `<div class="hint">${esc(l.details.join('、'))}</div>` : ''}</td>
+            <td>${esc(l.name)}${l.custom ? ` <button type="button" class="icon-btn" data-del-custom="${esc(l.key.slice(7))}" title="刪除這個自訂工程">✕</button>` : ''}${mode === 'room' ? `<div class="hint">${esc(l.group)}</div>` : l.details.length ? `<div class="hint">${esc(l.details.join('、'))}</div>` : ''}</td>
             <td class="n">${l.custom ? `<input type="number" min="0" step="1" data-qty="${esc(l.key)}" value="${l.qty}" aria-label="${esc(l.name)}數量">` : num(l.qty)}${l.waste ? `<div class="hint">含損耗 ${Math.round(l.waste * 100)}%</div>` : ''}</td>
             <td>${esc(l.unit)}</td>
             <td class="n"><input type="number" min="0" step="100" data-price="${esc(l.key)}" value="${l.price}" aria-label="${esc(l.name)}單價">${Number.isFinite(B.prices?.[l.key]) ? `<button type="button" class="icon-btn" data-reset="${esc(l.key)}" title="恢復預設單價">↺</button>` : ''}</td>
@@ -1551,7 +1564,7 @@ class App {
   }
 
   printBudget() {
-    const r = computeBudget(store.project);
+    const r = computeBudget(store.project), mode = this.budgetMode();
     const fmt = (n) => Math.round(n).toLocaleString('zh-TW');
     const w = window.open('', '_blank');
     if (!w) { toast('瀏覽器擋住了列印視窗，請允許彈出視窗後再試'); return; }
@@ -1560,9 +1573,9 @@ class App {
       table{width:100%;border-collapse:collapse;font-size:12px}th,td{border-bottom:1px solid #ddd;padding:5px 6px;text-align:left;vertical-align:top}.n{text-align:right}.g th{background:#f3f4f6}
       small{color:#666}tfoot td{font-weight:700;font-size:14px;border-top:2px solid #111}</style></head><body>
       <h1>${esc(store.project.name || '室內設計')} 預算與材料清單</h1>
-      <p>${TIERS[r.tier].name}價位 · 室內約 ${r.area.toFixed(1)} 坪 · 單價為台灣市場大略行情（含材料與施工），實際以廠商報價為準</p>
+      <p>${mode === 'room' ? '依房間分組 · ' : ''}${TIERS[r.tier].name}價位 · 室內約 ${r.area.toFixed(1)} 坪 · 單價為台灣市場大略行情（含材料與施工），實際以廠商報價為準</p>
       <table><thead><tr><th>項目</th><th class="n">數量</th><th>單位</th><th class="n">單價</th><th class="n">小計</th></tr></thead>
-      ${r.groups.map((g) => `<tbody><tr class="g"><th colspan="4">${esc(g.name)}</th><th class="n">${fmt(g.subtotal)}</th></tr>${g.lines.filter((l) => l.on).map((l) => `<tr><td>${esc(l.name)}${l.details.length ? `<br><small>${esc(l.details.join('、'))}</small>` : ''}</td><td class="n">${Number.isInteger(l.qty) ? l.qty : l.qty.toFixed(2)}</td><td>${l.unit}</td><td class="n">${fmt(l.price)}</td><td class="n">${fmt(l.amount)}</td></tr>`).join('')}</tbody>`).join('')}
+      ${(mode === 'room' ? r.rooms : r.groups).map((g) => `<tbody><tr class="g"><th colspan="4">${esc(g.name)}</th><th class="n">${fmt(g.subtotal)}</th></tr>${g.lines.filter((l) => l.on).map((l) => `<tr><td>${esc(l.name)}${mode === 'room' ? `<br><small>${esc(l.group)}</small>` : l.details.length ? `<br><small>${esc(l.details.join('、'))}</small>` : ''}</td><td class="n">${Number.isInteger(l.qty) ? l.qty : l.qty.toFixed(2)}</td><td>${l.unit}</td><td class="n">${fmt(l.price)}</td><td class="n">${fmt(l.amount)}</td></tr>`).join('')}</tbody>`).join('')}
       <tfoot><tr><td colspan="4">總計（每坪約 ${fmt(r.perPing)} 元）</td><td class="n">${fmt(r.total)}</td></tr></tfoot></table></body></html>`);
     w.document.close();
     w.focus();

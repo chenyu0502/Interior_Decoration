@@ -370,6 +370,13 @@ input, select, textarea { font: inherit; color: inherit; }
 .modal-card.budget-card { width: min(980px, 100%); }
 .budget-opts { display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; padding: 10px 18px; border-bottom: 1px solid var(--line); font-size: 13px; }
 .budget-opts select { margin-left: 4px; }
+.budget-mode { display: inline-flex; gap: 2px; }
+.budget-mode label { cursor: pointer; }
+.budget-mode input { position: absolute; opacity: 0; pointer-events: none; }
+.budget-mode span { display: block; padding: 3px 10px; border-radius: 6px; }
+.budget-mode input:checked + span { background: var(--accent); color: #fff; }
+.budget-mode input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 1px; }
+.budget-opts .hint { flex-basis: 100%; margin: 0; }
 .budget-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .budget-table th, .budget-table td { padding: 5px 8px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
 .budget-table thead th { position: sticky; top: -16px; background: var(--panel); color: var(--muted); font-weight: 500; z-index: 1; }
