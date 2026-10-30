@@ -26,6 +26,7 @@ import { TourPlayer, planTour, pickMime, tourSteps, viewTargets, previewStop } f
 import { pickEncoder } from './editor/mp4-mux.js';
 import { longLink, shortLink, readShareFromUrl, getGithubToken, setGithubToken, siteUrl } from './core/share.js';
 import { makeQR, qrToCanvas } from './core/qrcode.js';
+import { arPayload, arLink } from './ar/ar-link.js';
 import { computeBudget, budgetCSV, TIERS, GROUPS } from './editor/budget.js';
 import { quoteHTML, quoteOptions, validTaxId, validEmail } from './editor/quote.js';
 import { ensureVariants, addVariant, switchVariant, renameVariant, deleteVariant, variantData, withVariant } from './core/variants.js';
@@ -471,6 +472,7 @@ class App {
         <div class="field"><label>左右翻轉</label><div class="row"><button class="btn small ${o.mirror ? 'on' : ''}" data-act="mirror" title="左右鏡像（M），例如流理台水槽與爐具互換">⇆ ${o.mirror ? '已翻轉' : '翻轉'}</button></div></div>
         ${(def.roles || []).map((r, i) => `<div class="field"><label>${roleNames[r] || r}</label><div class="row"><input type="color" data-k="${i ? 'color2' : 'color'}" value="${(i ? o.color2 : o.color) || pal[r] || '#cccccc'}"><button class="btn small" data-act="resetColor${i}" title="恢復風格預設">↺</button></div></div>`).join('')}
         <div class="btn-row"><button class="btn" data-act="dup">複製 (Ctrl+D)</button><button class="btn danger" data-act="del">刪除 (Del)</button></div>
+        <div class="btn-row"><button class="btn" data-act="ar" title="產生 QR code，用手機 AR 以實際尺寸把這件家具擺進自己家">▣ 手機 AR 擺放</button></div>
         <p class="hint">拖曳靠近牆面會自動貼齊（按住 Alt 可取消磁吸）。方向鍵微調位置、R 鍵旋轉 90°、M 鍵左右翻轉。</p></div>`;
     } else if (sel.type === 'wall') {
       const L = Math.round(wallLength(o));
@@ -585,6 +587,7 @@ class App {
         const act = b.dataset.act;
         if (act === 'del') this.deleteSelection();
         else if (act === 'dup') this.duplicate();
+        else if (act === 'ar') this.openAR([o.id]);
         else if (act === 'rot90') this.rotateSelection(90);
         else if (act === 'mirror') this.mirrorSelection();
         else if (act === 'resetColor0' || act === 'resetColor1') store.commit(() => { o[act === 'resetColor0' ? 'color' : 'color2'] = null; }, 'edit');
@@ -984,6 +987,7 @@ class App {
         budget: () => this.openBudget(),
         variants: () => this.openVariants(),
         share: () => this.openShare(),
+        ar: () => this.openAR(),
         keepShared: () => this.keepShared(),
         leaveShared: () => { location.href = siteUrl(); },
         live: () => { const l = this.view3d.live; l.setEnabled(!l.enabled); toast(l.enabled ? '實景模式已開啟：停止操作約 1 秒後，畫面會逐漸算成照片' : '實景模式已關閉'); },
@@ -1867,6 +1871,79 @@ class App {
     return c;
   }
 
+  // ------------------------------------------------------------ 手機 AR 擺放家具
+  // ids：預先勾選的家具（從屬性面板開啟時為選取的家具）
+  openAR(ids) {
+    const m = $('#arModal');
+    if (!this.arBound) {
+      this.arBound = true;
+      m.addEventListener('click', (e) => {
+        if (e.target === m || e.target.closest('[data-ar="close"]')) { m.hidden = true; return; }
+        const a = e.target.closest('[data-ar]')?.dataset.ar;
+        if (a === 'copy') this.copyText($('#arUrl').value);
+        else if (a === 'open' && $('#arUrl').value) window.open($('#arUrl').value, '_blank', 'noopener');
+        else if (a === 'none') { this.arPick.clear(); this.renderARPick(); this.updateARLink(); }
+        const room = e.target.closest('[data-ar-room]');
+        if (room) {
+          const list = this.arRooms.get(room.dataset.arRoom) || [];
+          const all = list.every((it) => this.arPick.has(it.id));
+          for (const it of list) { if (all) this.arPick.delete(it.id); else this.arPick.add(it.id); }
+          this.renderARPick(); this.updateARLink();
+        }
+      });
+      m.addEventListener('change', (e) => {
+        const id = e.target.dataset.arItem;
+        if (!id) return;
+        if (e.target.checked) this.arPick.add(id); else this.arPick.delete(id);
+        this.renderARPick(); this.updateARLink();
+      });
+    }
+    const sel = store.selection?.type === 'item' ? [store.selection.id] : [];
+    this.arPick = new Set((ids || sel).filter((id) => store.find('item', id)));
+    m.hidden = false;
+    this.renderARPick();
+    this.updateARLink();
+  }
+
+  renderARPick() {
+    const P = store.project;
+    const rooms = new Map();
+    for (const it of P.items) {
+      if (!CATALOG_MAP[it.kind]) continue;
+      const r = P.rooms.find((x) => pointInPolygon(it.x, it.y, x.points));
+      const k = r ? r.name : '其他';
+      if (!rooms.has(k)) rooms.set(k, []);
+      rooms.get(k).push(it);
+    }
+    this.arRooms = rooms;
+    $('#arPick').innerHTML = P.items.length ? [...rooms].map(([name, list]) => {
+      const on = list.filter((it) => this.arPick.has(it.id)).length;
+      return `<div class="ar-room"><div class="ar-room-head"><b>${esc(name)}</b><button type="button" class="btn small" data-ar-room="${esc(name)}">${on === list.length ? '取消整間' : '整間勾選'}</button></div>
+        ${list.map((it) => `<label class="ar-row"><input type="checkbox" data-ar-item="${it.id}" ${this.arPick.has(it.id) ? 'checked' : ''}> ${esc(it.name || CATALOG_MAP[it.kind].name)} <span class="hint">${Math.round(it.w)}×${Math.round(it.d)}×${Math.round(it.h)}</span></label>`).join('')}</div>`;
+    }).join('') : '<p class="hint">平面圖中還沒有家具。</p>';
+  }
+
+  async updateARLink() {
+    const token = (this.arToken = (this.arToken || 0) + 1);
+    const items = store.project.items.filter((it) => this.arPick.has(it.id));
+    const box = $('#arQr');
+    if (!items.length) {
+      box.textContent = '請在左側勾選家具'; $('#arUrl').value = ''; $('#arQrInfo').textContent = '';
+      return;
+    }
+    const url = await arLink(arPayload(items, { styleId: store.project.design.styleId, name: store.project.name || '' }));
+    if (token !== this.arToken) return;
+    $('#arUrl').value = url;
+    const qr = makeQR(url, url.length < 600 ? 'M' : 'L');
+    if (!qr) {
+      box.textContent = '勾選的家具太多，網址放不進 QR code，請減少件數，或複製連結傳到手機開啟';
+      $('#arQrInfo').textContent = `已選 ${items.length} 件`;
+      return;
+    }
+    box.replaceChildren(qrToCanvas(qr, 6));
+    $('#arQrInfo').textContent = `已選 ${items.length} 件 · 用手機相機掃描`;
+  }
+
   async copyText(text) {
     try { await navigator.clipboard.writeText(text); toast('已複製連結'); } catch {
       const t = document.createElement('textarea');
@@ -2525,6 +2602,7 @@ class App {
       if (!$('#renderModal').hidden) { if (e.key === 'Escape') this.closeRender(); return; }
       if (!$('#tourModal').hidden) { if (e.key === 'Escape') this.closeTour(); return; }
       if (!$('#shareModal').hidden) { if (e.key === 'Escape') $('#shareModal').hidden = true; return; }
+      if (!$('#arModal').hidden) { if (e.key === 'Escape') $('#arModal').hidden = true; return; }
       if (!$('#budgetModal').hidden) {
         if (e.key === 'Escape') {
           const pv = $('#budgetModal .photo-view'), qp = $('#quotePanel');

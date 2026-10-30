@@ -14,7 +14,7 @@
 Interior Studio：純前端靜態網頁的室內設計工具（2D 平面圖、即時 3D、AI 風格自動設計、寫實渲染、360° 環景）。
 
 - 沒有建置流程，ES Module 直接由瀏覽器載入；`three` 透過 `index.html` 的 importmap 指向 `vendor/three/three.module.min.js`（r169）。
-- 第三方函式庫全部放在 `vendor/`（Three.js、Anthropic SDK、three-gpu-pathtracer 打包檔），不使用 CDN。
+- 第三方函式庫全部放在 `vendor/`（Three.js 與其 addons（含 USDZExporter、fflate）、Anthropic SDK、three-gpu-pathtracer 打包檔），不使用 CDN。
 - 部署：合併到 `main` 後，`.github/workflows/pages.yml` 自動發布到 GitHub Pages。
 
 主要檔案：
@@ -39,6 +39,7 @@ Interior Studio：純前端靜態網頁的室內設計工具（2D 平面圖、�
 | `js/editor/quote.js` | 報價單（預算清單依房間或工程類別排版列印、營業稅、新台幣大寫金額、報價說明與簽章欄、公司與業主統一編號、業主電子郵件、公司地址與電話、LINE、WeChat、統編檢查碼、公司 Logo 存在 localStorage） |
 | `js/editor/budget.js` | 預算與材料清單（地坪、牆面、天花板面積、門窗與家具數量、預設單價與價位等級、項目做與不做、自訂工程、依類別或房間分組、項目備註與照片（`project.budgetNotes`）、CSV 匯出） |
 | `js/editor/tour.js`、`mp4-mux.js` | 導覽影片（依門的連通順序走訪房間、運鏡、字幕）與 MP4 逐格封裝 |
+| `ar.html`、`js/ar/ar-app.js`、`ar-link.js` | 手機 AR 擺放家具（QR code 連結只含家具資料；Android 用 WebXR hit-test、iPhone 轉 USDZ 以 AR 快速查看）；桌面端的勾選視窗在 `main.js` |
 | `js/core/share.js`、`qrcode.js` | 分享連結（網址內壓縮資料、GitHub Gist 短網址、唯讀檢視）與 QR code 產生器 |
 | `js/data/catalog.js` | 家具與門窗（2D 符號、3D 程序化模型、可調參數） |
 | `js/data/materials.js`、`styles.js`、`samples.js` | 材質、風格模板、範例平面圖 |
@@ -50,7 +51,7 @@ Interior Studio：純前端靜態網頁的室內設計工具（2D 平面圖、�
 ## 開發流程
 
 1. 從最新的 `main` 建立或重設開發分支 `claude/interior-design-web-app-wtcua0`（前一個 PR 已合併時，以 `git fetch origin main && git checkout -B claude/interior-design-web-app-wtcua0 origin/main` 重新開始）。
-2. 修改程式，並在本機啟動伺服器（`npx http-server -p 8765 -c-1`）用 Playwright 實際操作測試；手機相關功能以觸控、手機尺寸模擬測試；VR 功能以 IWER（Immersive Web Emulation Runtime，`installRuntime({ forceInstall: true })`）模擬 Meta Quest 3 測試。
+2. 修改程式，並在本機啟動伺服器（`npx http-server -p 8765 -c-1`）用 Playwright 實際操作測試；手機相關功能以觸控、手機尺寸模擬測試；VR 功能以 IWER（Immersive Web Emulation Runtime，`installRuntime({ forceInstall: true })`）模擬 Meta Quest 3 測試；AR 擺放以 IWER 搭配自訂的地板模擬環境（`installSEM`，射線與 y = 0 平面求交點）測試 hit-test 流程。
 3. 每次發布新功能或修正都要更新版本：
    - `js/version.js` 的 `VERSION`，並在 `CHANGELOG` 最前面新增一筆。
    - 同步更新 `CHANGELOG.md` 與 `package.json` 的版本號。
