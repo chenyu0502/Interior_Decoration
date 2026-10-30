@@ -5,9 +5,16 @@
 //   次版號：新增功能
 //   修訂號：錯誤修正
 
-export const VERSION = '1.44.1';
+export const VERSION = '1.45.0';
 
 export const CHANGELOG = [
+  {
+    version: '1.45.0',
+    date: '2026-10-30',
+    notes: [
+      '報價單新增公司電話、手機、LINE ID 與 WeChat ID：在「列印報價單」設定中填寫，顯示在報價單左上角公司名稱下方（電話與手機同一行、LINE 與 WeChat 同一行），未填寫的項目不顯示。',
+    ],
+  },
   {
     version: '1.44.1',
     date: '2026-10-30',
