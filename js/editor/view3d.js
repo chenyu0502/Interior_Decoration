@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { OrbitControls } from '../../vendor/three/addons/OrbitControls.js';
 import { RoomEnvironment } from '../../vendor/three/addons/RoomEnvironment.js';
 import { store } from '../core/state.js';
-import { wallFrame, wallLength, polygonBBox, snap, clamp } from '../core/geometry.js';
+import { wallFrame, wallLength, polygonBBox, polygonCentroid, pointInPolygon, snap, clamp } from '../core/geometry.js';
 import { wallJoins, projectBounds } from '../core/model.js';
 import { CATALOG_MAP, buildItemObject, buildOpeningObject } from '../data/catalog.js';
 import { materialCanvas, getMaterial } from '../data/materials.js';
@@ -12,6 +12,7 @@ import { enableGyro } from './pano-viewer.js';
 import { VRMode } from './vr.js';
 import { LiveTrace } from './live-trace.js';
 import { makeLook, makeSky } from './render-look.js';
+import { lightingState, isLamp } from './lighting.js';
 
 const S = 0.01; // 公分 → 公尺
 
@@ -36,6 +37,7 @@ export class View3D {
     // 背景天空：從窗戶看出去是天空而不是單色
     this.skyDay = makeSky({ zenith: '#8db6e6', horizon: '#e8eef3', ground: '#cfc9bd', env: 1, width: 512 });
     this.skyNight = makeSky({ zenith: '#05080f', horizon: '#121829', ground: '#14161b', env: 1, width: 256 });
+    this.skyDusk = makeSky({ zenith: '#34466e', horizon: '#f0a465', ground: '#6e5f52', env: 1, width: 256 });
     this.scene.background = this.skyDay;
     const pmrem = new THREE.PMREMGenerator(this.renderer);
     this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
@@ -175,6 +177,7 @@ export class View3D {
     // 日夜切換時燈罩發光程度不同，重新套用寫實材質
     const night = !!P.settings.night;
     if (night !== this._lookNight) { this._lookNight = night; this.applyLook(this.structure); this.applyLook(this.itemsGroup); }
+    this.applyLampGlow();
     if (this.firstBuild && (P.walls.length || P.items.length)) { this.firstBuild = false; this.resetView(); }
     this.updateSelection();
   }
@@ -428,6 +431,14 @@ export class View3D {
         obj.add(inner);
         obj.userData = { itemId: it.id };
         inner.traverse((o) => { o.userData.itemId = it.id; });
+        // 燈具的發光材質每盞各自一份，才能個別開關、調亮度與色溫
+        if (isLamp(it)) {
+          inner.traverse((o) => {
+            if (!o.isMesh || o.material?.userData?.kind !== 'emissive') return;
+            o.material = o.material.clone();
+            o.material.userData = { ...o.material.userData, lampId: it.id, baseEI: o.material.emissiveIntensity || 1 };
+          });
+        }
         this.applyLook(obj);
         this.collectItemParts(obj, it.id);
         this.itemsGroup.add(obj);
@@ -449,17 +460,25 @@ export class View3D {
 
   applyLighting() {
     const P = store.project;
-    const night = P.settings.night;
-    const style = P.design.styleId;
-    const temp = { modern: '#fff6ea', nordic: '#ffe9cf', japandi: '#ffe7c7', wabisabi: '#ffdcb0', luxury: '#ffe4bd' }[style] || '#ffeccc';
-    this.hemi.intensity = night ? 0.12 : 1.1;
-    this.sun.intensity = night ? 0 : 2.2;
-    this.sun.color.set('#fff3e0');
-    this.scene.environmentIntensity = night ? 0.12 : 0.55;
-    this.scene.background = night ? this.skyNight : this.skyDay;
-    this.ground.material.color.set(night ? '#30343d' : '#dfe3e6');
+    const L = lightingState(P);
+    this.lighting = L;
+    const night = L.time === 'night', dusk = L.time === 'dusk';
+    this.hemi.intensity = night ? 0.12 : dusk ? 0.4 : 1.1;
+    this.sun.intensity = night ? 0 : dusk ? 1.1 : 2.2;
+    this.sun.color.set(dusk ? '#ffa458' : '#fff3e0');
+    this.scene.environmentIntensity = night ? 0.12 : dusk ? 0.3 : 0.55;
+    this.scene.background = night ? this.skyNight : dusk ? this.skyDusk : this.skyDay;
+    this.ground.material.color.set(night ? '#30343d' : dusk ? '#8a7a6a' : '#dfe3e6');
+    const b = projectBounds(P);
+    const cx = ((b.x0 + b.x1) / 2) * S, cz = ((b.y0 + b.y1) / 2) * S;
+    const R = Math.max(10, Math.max(b.x1 - b.x0, b.y1 - b.y0) * S);
+    if (dusk) {
+      // 傍晚：太陽低掛在西方，光線偏橘
+      this.sun.position.set(cx - R * 2.4, R * 0.45, cz + R * 0.6);
+      this.sun.target.position.set(cx, 0, cz);
+    }
     const sim = this.sunSim;
-    if (sim && !night) {
+    if (sim && !night && !dusk) {
       // 依太陽高度調整：低角度時光線偏暖、天空較暗
       const c = this._sunC || { x: 0, z: 0, R: 10 };
       const d = sim.dir;
@@ -472,22 +491,67 @@ export class View3D {
       this.hemi.intensity = 0.22 + 0.33 * k;
       this.scene.environmentIntensity = 0.14 + 0.2 * k;
     }
-    // 燈具光源（夜間模式啟用）
+    // 燈具光源：依情境決定每盞燈的亮度與色溫（即時畫面最多 12 盞，取最亮的）
     this.clearGroup(this.lightsGroup);
-    if (!night) return;
-    let n = 0;
-    for (const it of P.items) {
+    if (L.time === 'day') return;
+    const lamps = P.items.filter((it) => (L.lamps.get(it.id) || 0) > 0)
+      .sort((a, c) => L.lamps.get(c.id) - L.lamps.get(a.id)).slice(0, 12);
+    let sum = 0;
+    for (const it of lamps) {
       const def = CATALOG_MAP[it.kind];
-      if (!def?.light || n >= 12) continue;
-      n++;
-      const l = new THREE.PointLight(temp, def.light.intensity * 6, def.light.dist, 1.6);
+      const f = L.lamps.get(it.id);
+      sum += f;
+      const l = new THREE.PointLight(L.color, def.light.intensity * 6 * f, def.light.dist * (0.6 + 0.4 * f), 1.6);
       const y = def.ceiling ? it.elev - 5 : it.elev + it.h * 0.85;
       l.position.set(it.x * S, y * S, it.y * S);
       this.lightsGroup.add(l);
     }
-    // 環境補光避免全黑
-    const amb = new THREE.AmbientLight(temp, 0.25);
+    // 沒有燈具的房間：全亮類情境自動補一盞主燈
+    if (L.fill && this.lightsGroup.children.length < 16) {
+      for (const r of P.rooms) {
+        if (P.items.some((it) => (L.lamps.get(it.id) || 0) > 0 && pointInPolygon(it.x, it.y, r.points))) continue;
+        const [x, y] = polygonCentroid(r.points);
+        const l = new THREE.PointLight(L.color, 6 * L.dim, 6, 1.6);
+        l.position.set(x * S, (P.settings.wallHeight - 30) * S, y * S);
+        this.lightsGroup.add(l);
+        sum += L.dim;
+        if (this.lightsGroup.children.length >= 16) break;
+      }
+    }
+    // 環境補光：開的燈越多越亮，全關時只剩很暗的月光
+    const amb = new THREE.AmbientLight(L.color, night ? 0.05 + Math.min(0.2, sum * 0.05) : 0.12);
     this.lightsGroup.add(amb);
+  }
+
+  // 燈罩、燈管的發光程度與顏色跟著每盞燈的開關、亮度與色溫
+  applyLampGlow() {
+    const L = this.lighting || lightingState(store.project);
+    const color = new THREE.Color(L.color);
+    for (const it of store.project.items) {
+      if (!isLamp(it)) continue;
+      const e = this.itemCache.get(it.id);
+      if (!e) continue;
+      const f = L.time === 'day' ? 0 : L.lamps.get(it.id) || 0;
+      e.obj.traverse((o) => {
+        if (!o.isMesh) return;
+        for (const m of Array.isArray(o.material) ? o.material : [o.material]) {
+          const base = m?.userData?.baseEI;
+          if (base === undefined) continue;
+          m.emissiveIntensity = base * (f > 0 ? 1.2 * (0.25 + 0.75 * f) : 0.12);
+          m.emissive.copy(f > 0 ? color : new THREE.Color('#fff4dc'));
+        }
+      });
+    }
+  }
+
+  // 漫遊時點到的燈具（6 公尺內）
+  lampAt(e) {
+    this.raycaster.setFromCamera(this._ndc(e), this.camera);
+    this.raycaster.far = 6;
+    const hit = this.raycaster.intersectObjects([this.itemsGroup], true)[0];
+    const id = hit?.object.userData.itemId;
+    const it = id && store.project.items.find((x) => x.id === id);
+    return it && isLamp(it) ? id : null;
   }
 
   cutHeight() {
@@ -671,7 +735,7 @@ export class View3D {
       // 漫遊時滑鼠移到門上顯示手形游標
       if (this.mode === 'walk' && !this.lookDrag && e.pointerType === 'mouse') {
         const now = performance.now();
-        if (!this._hoverT || now - this._hoverT > 80) { this._hoverT = now; c.style.cursor = this.doorAt(e) ? 'pointer' : ''; }
+        if (!this._hoverT || now - this._hoverT > 80) { this._hoverT = now; c.style.cursor = this.doorAt(e) || this.lampAt(e) ? 'pointer' : ''; }
       }
       if (this.lookDrag) {
         if (this.walk.gyro && this.walk.gyroOffset !== null) {
@@ -704,6 +768,7 @@ export class View3D {
         // 漫遊時點門：開門 / 關門
         const id = this.doorAt(e);
         if (id) this.toggleDoor(id);
+        else { const lamp = this.lampAt(e); if (lamp) this.app.toggleLamp?.(lamp); }
       } else if (this.down && !moved && this.down.button === 0 && this.mode !== 'walk') {
         const hit = this.pick(e);
         if (!hit) store.select(null);

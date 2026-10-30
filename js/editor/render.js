@@ -135,36 +135,41 @@ export class RenderStudio {
       scene.add(sun, sun.target);
     }
 
-    // 室內燈光：燈具依類型放置光源；沒有主燈的房間自動補一盞吸頂燈
+    // 室內燈光：燈具依類型放置光源；沒有主燈的房間自動補一盞吸頂燈。
+    // 有燈光情境時依每盞燈的亮度與色溫打光，並只在全亮類情境補主燈
     if (opts.lights) {
-      const warm = new THREE.Color('#ffd9a8');
+      const L = opts.lighting?.anyOn ? opts.lighting : null;
+      const warm = new THREE.Color(L ? L.color : '#ffd9a8');
       const lit = new Set();
       for (const it of P.items) {
         const def = CATALOG_MAP[it.kind];
         if (!def?.light) continue;
+        const f = L ? L.lamps.get(it.id) || 0 : 1;
+        if (f <= 0) continue;
         const x = it.x * S, z = it.y * S;
+        const room = P.rooms.find((r) => pointInPolygon(it.x, it.y, r.points));
         if (def.ceiling) {
-          const room = P.rooms.find((r) => pointInPolygon(it.x, it.y, r.points));
           if (room) lit.add(room.id);
-          const l = new THREE.PointLight(warm, def.light.intensity * 3, 0, 2);
+          const l = new THREE.PointLight(warm, def.light.intensity * 3 * f, 0, 2);
           l.position.set(x, (it.elev - 4) * S, z);
           scene.add(l);
         } else {
-          const l = new THREE.PointLight(warm, def.light.intensity * 2, 0, 2);
+          if (room && L) lit.add(room.id);
+          const l = new THREE.PointLight(warm, def.light.intensity * 2 * f, 0, 2);
           l.position.set(x, (it.elev + it.h * 0.8) * S, z);
           scene.add(l);
         }
       }
       for (const r of P.rooms) {
-        if (lit.has(r.id)) continue;
+        if (lit.has(r.id) || (L && !L.fill)) continue;
         const [x, y] = polygonCentroid(r.points);
         const area = Math.abs(polygonArea(r.points)) / 10000; // m²
-        const l = new THREE.PointLight(warm, Math.min(10, 2 + area * 0.25), 0, 2);
+        const l = new THREE.PointLight(warm, Math.min(10, 2 + area * 0.25) * (L ? L.dim : 1), 0, 2);
         l.position.set(x * S, (P.settings.wallHeight - 25) * S, y * S);
         scene.add(l);
       }
     }
-    this.disposables.push(...realisticMaterials(scene, { lights: opts.lights, normalMaps: opts.detail !== false, raster: !pathTracing }));
+    this.disposables.push(...realisticMaterials(scene, { lights: opts.lights, lighting: opts.lights && opts.lighting?.anyOn ? opts.lighting : null, normalMaps: opts.detail !== false, raster: !pathTracing }));
     return scene;
   }
 
