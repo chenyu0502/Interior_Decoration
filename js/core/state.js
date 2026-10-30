@@ -155,11 +155,14 @@ class Store {
   }
 
   // ---- 儲存
+  // readOnly：檢視別人分享的設計時不自動存檔，避免覆蓋自己原本的專案
   scheduleSave() {
+    if (this.readOnly) return;
     clearTimeout(this._saveTimer);
     this._saveTimer = setTimeout(() => this.saveLocal(), 700);
   }
   saveLocal() {
+    if (this.readOnly) return;
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(this.project));
     } catch (e) {
