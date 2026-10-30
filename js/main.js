@@ -1638,11 +1638,21 @@ class App {
       el.addEventListener('click', (e) => {
         const a = e.target.closest('[data-quote]')?.dataset.quote;
         if (a === 'cancel') el.hidden = true;
+        else if (a === 'logo-del') { setQuoteLogo(''); this.saveQuoteForm(); this.printBudget(); }
         else if (a === 'print') { this.saveQuoteForm(); el.hidden = true; this.openQuote(el.querySelector('input[name=qMode]:checked').value); }
       });
-      el.addEventListener('change', () => this.saveQuoteForm());
+      el.addEventListener('change', async (e) => {
+        if (e.target.name === 'qMode') this.quoteMode = e.target.value;
+        this.saveQuoteForm();
+        const f = e.target.matches('[data-quote-logo]') && e.target.files[0];
+        if (!f) return;
+        try {
+          setQuoteLogo(await shrinkLogo(f));
+          this.printBudget();
+        } catch (err) { toast(err.message || '無法讀取這張圖片'); }
+      });
     }
-    const o = quoteOptions(store.project), mode = this.budgetMode();
+    const o = quoteOptions(store.project), mode = this.quoteMode || this.budgetMode();
     const field = (k, label, ph = '') => `<label><span>${label}</span><input data-q="${k}" value="${esc(o[k])}" placeholder="${esc(ph)}"></label>`;
     el.innerHTML = `
       <div class="quote-box" role="dialog" aria-label="列印報價單">
@@ -1655,6 +1665,11 @@ class App {
         <div class="quote-grid">
           ${field('client', '業主', '業主姓名')}${field('phone', '聯絡電話')}
           ${field('site', '案場地址')}${field('company', '報價單位', '公司或工作室名稱')}
+          <div class="quote-logo"><span>公司 Logo</span>
+            <div>${quoteLogo() ? `<img src="${quoteLogo()}" alt="公司 Logo">` : '<em>尚未設定</em>'}
+              <label class="btn small">${quoteLogo() ? '更換' : '上傳'}<input type="file" accept="image/*" data-quote-logo hidden></label>
+              ${quoteLogo() ? '<button type="button" class="btn small" data-quote="logo-del">移除</button>' : ''}</div>
+            <small class="hint">存在這個瀏覽器中，所有專案的報價單共用</small></div>
           ${field('contact', '報價人')}
           <label><span>有效天數</span><input data-q="validDays" type="number" min="1" max="365" value="${esc(o.validDays)}"></label>
         </div>
@@ -1685,7 +1700,7 @@ class App {
 
   openQuote(mode) {
     const P = store.project;
-    const html = quoteHTML(P, computeBudget(P), mode, P.budgetNotes || {});
+    const html = quoteHTML(P, computeBudget(P), mode, P.budgetNotes || {}, quoteLogo());
     const w = window.open('', '_blank');
     if (!w) { toast('瀏覽器擋住了列印視窗，請允許彈出視窗後再試'); return; }
     w.document.write(html);
@@ -2572,4 +2587,23 @@ async function shrinkPhoto(file) {
   c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
   bmp.close?.();
   return c.toDataURL('image/jpeg', 0.72);
+}
+
+// 報價單的公司 Logo：縮小到長邊 480px 的 PNG（保留透明背景），存在瀏覽器中
+const LOGO_KEY = 'interior-studio:quote-logo';
+const quoteLogo = () => { try { return localStorage.getItem(LOGO_KEY) || ''; } catch { return ''; } };
+function setQuoteLogo(src) {
+  try { if (src) localStorage.setItem(LOGO_KEY, src); else localStorage.removeItem(LOGO_KEY); } catch { throw new Error('瀏覽器無法儲存 Logo（可能是無痕模式或空間不足）'); }
+}
+async function shrinkLogo(file) {
+  if (!file.type.startsWith('image/')) throw new Error('請選擇圖片檔');
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('無法讀取這張圖片')); i.src = url; });
+    const w = img.naturalWidth || 480, h = img.naturalHeight || 480, k = Math.min(1, 480 / Math.max(w, h));
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(w * k)); c.height = Math.max(1, Math.round(h * k));
+    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+    return c.toDataURL('image/png');
+  } finally { URL.revokeObjectURL(url); }
 }
