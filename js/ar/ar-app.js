@@ -15,16 +15,44 @@ const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const itemName = (it) => it.name || CATALOG_MAP[it.kind]?.name || '家具';
 
-const state = { data: null, pick: 0, model: null, usdz: new Map() };
+const state = { data: null, pick: 0, model: null, usdz: new Map(), outline: true };
 
 // ---------------------------------------------------------------- 模型
-// raw：保留原始材質（匯出 USDZ 用）；否則套用寫實材質（預覽與 WebXR）
-function buildModel(items, { raw = false } = {}) {
+// 房間地板範圍：半透明地板、邊線與牆角的矮柱，方便在 AR 中對齊自己家的牆角（都用網格，USDZ 也能匯出）
+const OUTLINE = { fill: new THREE.MeshStandardMaterial({ color: 0x2563eb, transparent: true, opacity: 0.16, depthWrite: false, side: THREE.DoubleSide, roughness: 1 }),
+  edge: new THREE.MeshStandardMaterial({ color: 0x2563eb, roughness: 0.8 }), post: new THREE.MeshStandardMaterial({ color: 0x2563eb, transparent: true, opacity: 0.55, roughness: 0.8 }) };
+function roomOutline(polys) {
+  const g = new THREE.Group();
+  for (const pts of polys) {
+    if (pts.length < 3) continue;
+    const shape = new THREE.Shape(pts.map(([x, y]) => new THREE.Vector2(x * S, y * S)));
+    const fill = new THREE.Mesh(new THREE.ShapeGeometry(shape).rotateX(Math.PI / 2), OUTLINE.fill);
+    fill.position.y = 0.003;
+    fill.receiveShadow = true;
+    g.add(fill);
+    pts.forEach(([x1, y1], i) => {
+      const [x2, y2] = pts[(i + 1) % pts.length];
+      const L = Math.hypot(x2 - x1, y2 - y1) * S;
+      if (L < 0.01) return;
+      const e = new THREE.Mesh(new THREE.BoxGeometry(L, 0.012, 0.03), OUTLINE.edge);
+      e.position.set(((x1 + x2) / 2) * S, 0.006, ((y1 + y2) / 2) * S);
+      e.rotation.y = -Math.atan2(y2 - y1, x2 - x1);
+      const post = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.4, 0.04), OUTLINE.post);
+      post.position.set(x1 * S, 0.2, y1 * S);
+      g.add(e, post);
+    });
+  }
+  g.userData.outline = true;
+  return g;
+}
+
+// raw：保留原始材質（匯出 USDZ 用）；否則套用寫實材質（預覽與 WebXR）；outline：房間地板範圍
+function buildModel(items, { raw = false, outline = showOutline() } = {}) {
   const pal = paletteFor(state.data.s);
   const look = raw ? null : makeLook({ normalMaps: true });
   const g = new THREE.Group();
   for (const it of items) {
-    const inner = buildItemObject(it, pal, {});
+    const inner = buildItemObject(it, pal, { noContents: true });
     inner.scale.set(it.mirror ? -S : S, S, S);
     const o = new THREE.Group();
     o.add(inner);
@@ -37,6 +65,7 @@ function buildModel(items, { raw = false } = {}) {
     o.castShadow = true;
     if (look) o.material = Array.isArray(o.material) ? o.material.map(look) : look(o.material);
   });
+  if (outline) g.add(roomOutline(state.data.r));
   // 底部中心放在原點：AR 擺放時對齊地板
   const box = new THREE.Box3().setFromObject(g);
   const c = box.getCenter(new THREE.Vector3());
@@ -48,6 +77,7 @@ function buildModel(items, { raw = false } = {}) {
 }
 
 // 整組保留相對位置與方向；單件時正面朝向使用者（不沿用平面圖中的旋轉與位置）
+const showOutline = () => state.pick < 0 && state.outline && state.data.r.length > 0;
 const picked = () => (state.pick < 0 ? state.data.i : [{ ...state.data.i[state.pick], x: 0, y: 0, rot: 0 }]);
 
 // ---------------------------------------------------------------- 預覽
@@ -115,6 +145,7 @@ function setPick(i) {
   const s = state.model.userData.size;
   $('#arSize').textContent = `寬 ${Math.round(s.x * 100)} × 深 ${Math.round(s.z * 100)} × 高 ${Math.round(s.y * 100)} cm`;
   for (const b of document.querySelectorAll('.ar-item')) b.classList.toggle('on', Number(b.dataset.i) === i);
+  $('#arOutlineRow').hidden = !(i < 0 && state.data.r.length);
 }
 
 function disposeTree(root) {
@@ -124,7 +155,8 @@ function disposeTree(root) {
 function renderList() {
   const items = state.data.i;
   const card = (i, title, sub) => `<button type="button" class="ar-item" data-i="${i}"><b>${esc(title)}</b><span>${esc(sub)}</span></button>`;
-  $('#arList').innerHTML = (items.length > 1 ? card(-1, `整組（${items.length} 件）`, '保持設計中的相對位置') : '')
+  const whole = items.length > 1 || state.data.r.length;
+  $('#arList').innerHTML = (whole ? card(-1, state.data.r.length ? `整個房間（${items.length} 件）` : `整組（${items.length} 件）`, '保持設計中的相對位置') : '')
     + items.map((it, i) => card(i, itemName(it), `${Math.round(it.w)} × ${Math.round(it.d)} × ${Math.round(it.h)} cm`)).join('');
   $('#arList').addEventListener('click', (e) => {
     const b = e.target.closest('.ar-item');
@@ -187,7 +219,10 @@ async function startWebXR() {
   xr.reticle = makeReticle();
   xr.scene.add(xr.model, xr.reticle);
   xr.placed = false; xr.follow = true;
-  setTip('慢慢移動手機掃描地板，出現圓圈後點一下畫面擺放');
+  // 整個房間時旋轉間隔較小，方便對齊牆面
+  xr.step = showOutline() ? 5 : 15;
+  for (const b of document.querySelectorAll('[data-xr="left"], [data-xr="right"]')) b.textContent = `${b.dataset.xr === 'left' ? '↺' : '↻'} ${xr.step}°`;
+  setTip(showOutline() ? '站在房間中央附近，對著地板慢慢移動手機，出現圓圈後點一下擺放' : '慢慢移動手機掃描地板，出現圓圈後點一下畫面擺放');
   syncMoveBtn();
 
   session.addEventListener('select', onSelect);
@@ -226,7 +261,7 @@ function onSelect() {
     xr.model.visible = true;
   }
   xr.follow = false;
-  setTip('已擺放。按「移動」可換位置，↺ ↻ 旋轉方向');
+  setTip(showOutline() ? '已擺放。用 ↺ ↻ 讓藍色範圍的邊對齊牆面，按「移動」可換位置' : '已擺放。按「移動」可換位置，↺ ↻ 旋轉方向');
   syncMoveBtn();
 }
 
@@ -250,7 +285,7 @@ $('#arOverlay').addEventListener('click', (e) => {
   const a = e.target.closest('[data-xr]')?.dataset.xr;
   if (!a || !xr.session) return;
   if (a === 'end') xr.session.end();
-  else if (a === 'left' || a === 'right') xr.model.rotation.y += THREE.MathUtils.degToRad(a === 'left' ? 15 : -15);
+  else if (a === 'left' || a === 'right') xr.model.rotation.y += THREE.MathUtils.degToRad(a === 'left' ? xr.step : -xr.step);
   else if (a === 'move' && xr.placed) {
     xr.follow = !xr.follow;
     setTip(xr.follow ? '對準新位置後點一下畫面固定' : '已擺放。按「移動」可換位置，↺ ↻ 旋轉方向');
@@ -293,7 +328,7 @@ export async function makeUSDZ(items) {
 
 async function startQuickLook() {
   const btn = $('#arStart');
-  const key = state.pick;
+  const key = `${state.pick}:${showOutline()}`;
   let url = state.usdz.get(key);
   if (!url) {
     btn.disabled = true; btn.textContent = '正在產生 AR 模型…';
@@ -338,15 +373,16 @@ async function main() {
     showError(err.message);
     return;
   }
-  if (!state.data || !state.data.i.length) {
+  if (!state.data || (!state.data.i.length && !state.data.r.length)) {
     showError('沒有家具資料。請在 Interior Studio 選取家具後按「手機 AR 擺放」，再用手機掃描 QR code。');
     $('#arStart').textContent = '沒有可擺放的家具';
     return;
   }
   $('#arProject').textContent = state.data.n ? `來自設計「${state.data.n}」` : '';
   renderList();
+  $('#arOutline').addEventListener('change', (e) => { state.outline = e.target.checked; setPick(state.pick); });
   resize();
-  setPick(state.data.i.length > 1 ? -1 : 0);
+  setPick(state.data.i.length > 1 || state.data.r.length ? -1 : 0);
   renderer.setAnimationLoop(previewLoop);
 
   mode = await detect();
@@ -354,9 +390,9 @@ async function main() {
   btn.textContent = startLabel();
   btn.disabled = mode === 'none';
   $('#arHint').innerHTML = mode === 'webxr'
-    ? '按下後允許使用相機，對著地板慢慢移動手機，出現白色圓圈後點一下畫面即可擺放；之後可以移動位置或旋轉方向。'
+    ? '按下後允許使用相機，對著地板慢慢移動手機，出現白色圓圈後點一下畫面即可擺放；之後可以移動位置或旋轉方向。整個房間擺放時，建議站在房間中央，擺好後用旋轉讓藍色範圍對齊牆面。'
     : mode === 'quicklook'
-      ? '會以「AR 快速查看」開啟：對著地板移動手機，家具出現後用一指拖曳移動、兩指旋轉。家具以實際尺寸顯示。'
+      ? '會以「AR 快速查看」開啟：對著地板移動手機，家具出現後用一指拖曳移動、兩指旋轉。家具以實際尺寸顯示；整個房間擺放時，可用藍色範圍對齊牆角。'
       : '需要支援 AR 的手機：Android 請用 Chrome（需支援 Google Play 的 AR 服務），iPhone、iPad 請用 Safari 開啟這個網址。上方仍可旋轉預覽家具。';
   btn.addEventListener('click', () => (mode === 'webxr' ? startWebXR() : mode === 'quicklook' ? startQuickLook() : null));
 }

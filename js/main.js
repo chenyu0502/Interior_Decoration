@@ -508,6 +508,7 @@ class App {
         <section><div class="kv"><span>地板</span><span>${esc(MATERIAL_MAP[o.floor]?.name)}</span></div>${floorPick}</section>
         <section><div class="kv"><span>四周牆面（一次套用）</span></div>${wallPick}</section>
         <div class="btn-row"><button class="btn" data-act="designRoom">✦ 只設計這個房間</button><button class="btn danger" data-act="del">刪除房間</button></div>
+        <div class="btn-row"><button class="btn" data-act="arRoom" title="產生 QR code，用手機 AR 以實際尺寸把整個房間的家具擺進自己家">▣ 手機 AR 擺放整個房間</button></div>
         <div class="btn-row"><button class="btn" data-act="calibRoom" title="輸入這個房間的實際坪數，整張平面圖等比縮放">以此房間坪數校正整體比例</button></div>
         <p class="hint">拖曳頂點可調整房間形狀；刪除房間不會刪除牆。</p></div>`;
     } else if (sel.type === 'dim') {
@@ -587,7 +588,8 @@ class App {
         const act = b.dataset.act;
         if (act === 'del') this.deleteSelection();
         else if (act === 'dup') this.duplicate();
-        else if (act === 'ar') this.openAR([o.id]);
+        else if (act === 'ar') this.openAR([o.id], { outline: false });
+        else if (act === 'arRoom') this.openAR(store.project.items.filter((it) => pointInPolygon(it.x, it.y, o.points)).map((it) => it.id), { outline: true });
         else if (act === 'rot90') this.rotateSelection(90);
         else if (act === 'mirror') this.mirrorSelection();
         else if (act === 'resetColor0' || act === 'resetColor1') store.commit(() => { o[act === 'resetColor0' ? 'color' : 'color2'] = null; }, 'edit');
@@ -1873,7 +1875,7 @@ class App {
 
   // ------------------------------------------------------------ 手機 AR 擺放家具
   // ids：預先勾選的家具（從屬性面板開啟時為選取的家具）
-  openAR(ids) {
+  openAR(ids, { outline } = {}) {
     const m = $('#arModal');
     if (!this.arBound) {
       this.arBound = true;
@@ -1892,6 +1894,7 @@ class App {
         }
       });
       m.addEventListener('change', (e) => {
+        if (e.target.id === 'arOutline') { this.updateARLink(); return; }
         const id = e.target.dataset.arItem;
         if (!id) return;
         if (e.target.checked) this.arPick.add(id); else this.arPick.delete(id);
@@ -1900,6 +1903,7 @@ class App {
     }
     const sel = store.selection?.type === 'item' ? [store.selection.id] : [];
     this.arPick = new Set((ids || sel).filter((id) => store.find('item', id)));
+    if (outline !== undefined) $('#arOutline').checked = outline;
     m.hidden = false;
     this.renderARPick();
     this.updateARLink();
@@ -1931,7 +1935,10 @@ class App {
       box.textContent = '請在左側勾選家具'; $('#arUrl').value = ''; $('#arQrInfo').textContent = '';
       return;
     }
-    const url = await arLink(arPayload(items, { styleId: store.project.design.styleId, name: store.project.name || '' }));
+    // 勾選「附上房間地板範圍」時，帶入選取家具所在的房間輪廓
+    const P = store.project;
+    const rooms = $('#arOutline').checked ? P.rooms.filter((r) => r.points.length >= 3 && items.some((it) => pointInPolygon(it.x, it.y, r.points))) : [];
+    const url = await arLink(arPayload(items, { styleId: P.design.styleId, name: P.name || '', rooms }));
     if (token !== this.arToken) return;
     $('#arUrl').value = url;
     const qr = makeQR(url, url.length < 600 ? 'M' : 'L');
@@ -1941,7 +1948,7 @@ class App {
       return;
     }
     box.replaceChildren(qrToCanvas(qr, 6));
-    $('#arQrInfo').textContent = `已選 ${items.length} 件 · 用手機相機掃描`;
+    $('#arQrInfo').textContent = `已選 ${items.length} 件${rooms.length ? `，含 ${rooms.map((r) => r.name).join('、')}地板範圍` : ''} · 用手機相機掃描`;
   }
 
   async copyText(text) {

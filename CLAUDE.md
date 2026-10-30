@@ -39,7 +39,7 @@ Interior Studio：純前端靜態網頁的室內設計工具（2D 平面圖、�
 | `js/editor/quote.js` | 報價單（預算清單依房間或工程類別排版列印、營業稅、新台幣大寫金額、報價說明與簽章欄、公司與業主統一編號、業主電子郵件、公司地址與電話、LINE、WeChat、統編檢查碼、公司 Logo 存在 localStorage） |
 | `js/editor/budget.js` | 預算與材料清單（地坪、牆面、天花板面積、門窗與家具數量、預設單價與價位等級、項目做與不做、自訂工程、依類別或房間分組、項目備註與照片（`project.budgetNotes`）、CSV 匯出） |
 | `js/editor/tour.js`、`mp4-mux.js` | 導覽影片（依門的連通順序走訪房間、運鏡、字幕）與 MP4 逐格封裝 |
-| `ar.html`、`js/ar/ar-app.js`、`ar-link.js` | 手機 AR 擺放家具（QR code 連結只含家具資料；Android 用 WebXR hit-test、iPhone 轉 USDZ 以 AR 快速查看）；桌面端的勾選視窗在 `main.js` |
+| `ar.html`、`js/ar/ar-app.js`、`ar-link.js` | 手機 AR 擺放家具與整個房間（QR code 連結只含家具資料與房間地板輪廓；Android 用 WebXR hit-test、iPhone 轉 USDZ 以 AR 快速查看）；桌面端的勾選視窗在 `main.js` |
 | `js/core/share.js`、`qrcode.js` | 分享連結（網址內壓縮資料、GitHub Gist 短網址、唯讀檢視）與 QR code 產生器 |
 | `js/data/catalog.js` | 家具與門窗（2D 符號、3D 程序化模型、可調參數） |
 | `js/data/materials.js`、`styles.js`、`samples.js` | 材質、風格模板、範例平面圖 |
