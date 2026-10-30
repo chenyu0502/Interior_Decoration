@@ -925,7 +925,12 @@ class App {
   bindTopbar() {
     // 檔案選單
     const menu = $('#fileMenu');
-    $('[data-menu-toggle]', menu).addEventListener('click', (e) => { e.stopPropagation(); menu.classList.toggle('open'); });
+    $('[data-menu-toggle]', menu).addEventListener('click', (e) => {
+      e.stopPropagation();
+      menu.classList.toggle('open');
+      if (menu.classList.contains('open')) this.fitMenu(menu);
+    });
+    window.addEventListener('resize', () => { if (menu.classList.contains('open')) this.fitMenu(menu); });
     document.addEventListener('click', () => menu.classList.remove('open'));
     $('#sampleList').innerHTML = SAMPLES.map((s) => `<button data-sample="${s.id}">${esc(s.name)}</button>`).join('');
     $('#sampleList').addEventListener('click', (e) => {
@@ -990,6 +995,17 @@ class App {
       actions[a]?.();
       if (b.closest('.menu-pop')) menu.classList.remove('open');
     });
+  }
+
+  // 選單高度限制在畫面內（手機扣掉底部的選單列），超出時在選單內捲動
+  fitMenu(menu) {
+    const pop = $('.menu-pop', menu), bar = $('#mobileBar');
+    const bottom = bar && bar.offsetParent ? bar.getBoundingClientRect().top : window.innerHeight;
+    pop.style.maxHeight = `${Math.max(160, Math.floor(bottom - pop.getBoundingClientRect().top - 8))}px`;
+    // 右側超出畫面時往左移
+    pop.style.left = '';
+    const r = pop.getBoundingClientRect(), vw = document.documentElement.clientWidth;
+    if (r.right > vw - 8) pop.style.left = `${Math.round(Math.max(8 - (r.left - pop.offsetLeft), pop.offsetLeft - (r.right - (vw - 8))))}px`;
   }
 
   isMode(m) { return $('#views').classList.contains(`mode-${m}`); }
