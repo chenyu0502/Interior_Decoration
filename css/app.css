@@ -416,6 +416,12 @@ input, select, textarea { font: inherit; color: inherit; }
 .quote-grid span, .quote-terms span { color: var(--muted); font-size: 12px; }
 .quote-box input:not([type=checkbox]):not([type=radio]), .quote-box textarea { font: inherit; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--text); min-width: 0; }
 .quote-box textarea { resize: vertical; }
+.quote-logo { grid-column: 1 / -1; display: grid; gap: 3px; }
+.quote-logo > span { color: var(--muted); font-size: 12px; }
+.quote-logo > div { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.quote-logo img { max-height: 48px; max-width: 160px; object-fit: contain; border: 1px solid var(--line); border-radius: 6px; padding: 3px; background: #fff; }
+.quote-logo em { color: var(--muted); font-style: normal; font-size: 12px; }
+.quote-logo .hint { margin: 0; font-size: 11px; }
 .quote-foot { display: flex; justify-content: flex-end; gap: 8px; }
 @media (max-width: 520px) { .quote-grid { grid-template-columns: 1fr; } }
 .budget-add { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 12px; padding: 10px; border: 1px dashed var(--line); border-radius: 8px; font-size: 13px; }

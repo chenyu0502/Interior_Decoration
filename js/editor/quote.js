@@ -1,4 +1,5 @@
 // 報價單：把預算清單排成可列印的報價單（報價總表、各房間或各工程類別明細、稅金、條款與簽章欄）。
+// 公司 Logo 存在瀏覽器（localStorage，所有專案共用），不放進專案檔。
 // 報價單資訊存在 project.settings.budget.quote = { company, contact, client, site, phone, terms, tax, pageBreak, photos, validDays }。
 import { TIERS } from './budget.js';
 
@@ -44,7 +45,7 @@ export function moneyUpper(n) {
 const dateText = (d) => `${d.getFullYear()} 年 ${d.getMonth() + 1} 月 ${d.getDate()} 日`;
 
 // r：computeBudget 的結果；mode：'room' 或 'group'；notes：project.budgetNotes
-export function quoteHTML(P, r, mode, notes = {}) {
+export function quoteHTML(P, r, mode, notes = {}, logo = '') {
   const o = quoteOptions(P);
   const today = new Date(), until = new Date(today.getTime() + (Number(o.validDays) || 30) * 86400000);
   const no = `Q${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, '0')}${String(today.getDate()).padStart(2, '0')}-${String(today.getHours()).padStart(2, '0')}${String(today.getMinutes()).padStart(2, '0')}`;
@@ -72,6 +73,8 @@ body { font-family: "Microsoft JhengHei", "PingFang TC", "Noto Sans TC", sans-se
 header { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 3px solid #111; padding-bottom: 8px; margin-bottom: 12px; }
 header h1 { font-size: 24px; letter-spacing: 8px; margin: 0; }
 header .co { font-size: 15px; font-weight: 700; }
+header .brand { display: flex; align-items: center; gap: 12px; }
+header .logo { max-height: 64px; max-width: 200px; object-fit: contain; }
 header .meta { text-align: right; font-size: 11px; color: #333; line-height: 1.6; }
 .info { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 24px; margin-bottom: 14px; }
 .info div { border-bottom: 1px solid #bbb; padding: 4px 0; display: flex; gap: 8px; }
@@ -100,7 +103,7 @@ tr { break-inside: avoid; }
 .foot { margin-top: 10px; color: #666; font-size: 10px; }
 </style></head><body>
 <header>
-  <div><div class="co">${esc(o.company || '')}</div><h1>報價單</h1></div>
+  <div class="brand">${logo ? `<img class="logo" src="${logo}" alt="${esc(o.company || 'Logo')}">` : ''}<div><div class="co">${esc(o.company || '')}</div><h1>報價單</h1></div></div>
   <div class="meta">報價單號：${no}<br>報價日期：${dateText(today)}<br>有效期限：${dateText(until)}</div>
 </header>
 <div class="info">
