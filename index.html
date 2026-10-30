@@ -39,6 +39,7 @@
         <button data-action="export2d">匯出 2D 平面圖 PNG</button>
         <button data-action="export3d">匯出 3D 透視圖 PNG</button>
         <button data-action="share">分享連結與 QR code</button>
+        <button data-action="budget">預算與材料清單</button>
         <button data-action="clearance">動線與尺寸健檢</button>
         <button data-action="fengshui">風水檢查</button>
         <button data-action="render">寫實渲染（光線追蹤）</button>
@@ -281,6 +282,24 @@
         <button class="btn" data-tour="download" disabled>下載影片</button>
         <button class="btn primary" data-tour="start">開始錄製</button>
       </footer>
+    </div>
+  </div>
+
+  <div class="modal" id="budgetModal" hidden>
+    <div class="modal-card budget-card">
+      <header>
+        <h2>預算與材料清單</h2>
+        <button class="icon-btn" data-budget="close" title="關閉">✕</button>
+      </header>
+      <div class="budget-opts" id="budgetOpts"></div>
+      <div class="modal-body" id="budgetBody"></div>
+      <footer class="modal-foot budget-foot">
+        <span class="budget-total" id="budgetTotal"></span>
+        <button type="button" class="btn" data-budget="reset" title="清除所有自訂單價">恢復預設單價</button>
+        <button type="button" class="btn" data-budget="print">列印</button>
+        <button type="button" class="btn primary" data-budget="csv">匯出 CSV（Excel）</button>
+      </footer>
+      <p class="hint budget-note">數量依平面圖計算：地坪依房間面積、牆面扣除門窗、窗戶以才計、系統櫃與窗簾以寬度（尺）計，面材另加損耗。單價為台灣市場大略行情（含材料與施工），可直接修改，實際以廠商報價為準。</p>
     </div>
   </div>
 
