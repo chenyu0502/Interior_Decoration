@@ -39,6 +39,7 @@
         <button data-action="export2d">匯出 2D 平面圖 PNG</button>
         <button data-action="export3d">匯出 3D 透視圖 PNG</button>
         <button data-action="share">分享連結與 QR code</button>
+        <button data-action="variants">方案管理與對照</button>
         <button data-action="budget">預算與材料清單</button>
         <button data-action="clearance">動線與尺寸健檢</button>
         <button data-action="fengshui">風水檢查</button>
@@ -124,6 +125,7 @@
       </div>
       <div class="view view-3d" id="view3d">
         <div class="view-label">3D 透視圖</div>
+        <div class="variant-bar" id="variantBar" hidden></div>
         <div class="view-tools">
           <button class="icon-btn" data-action="resetView" title="重設視角">⟲</button>
           <button class="icon-btn" data-action="topView" title="俯視">⊙</button>
@@ -282,6 +284,27 @@
         <button class="btn" data-tour="download" disabled>下載影片</button>
         <button class="btn primary" data-tour="start">開始錄製</button>
       </footer>
+    </div>
+  </div>
+
+  <div class="modal" id="variantModal" hidden>
+    <div class="modal-card variant-card">
+      <header>
+        <h2>方案管理與對照</h2>
+        <button class="icon-btn" data-var="close" title="關閉">✕</button>
+      </header>
+      <div class="modal-body">
+        <div class="var-list" id="varList"></div>
+        <section class="var-compare" id="varCompare">
+          <div class="var-pick">
+            <label>對照 <select id="varA"></select></label><span>與</span><select id="varB"></select>
+            <span class="var-views"><button type="button" class="btn small on" data-view="persp">透視</button><button type="button" class="btn small" data-view="top">俯視</button></span>
+            <span class="hint">以目前 3D 畫面的視角算圖，拖曳中間的滑桿比較</span>
+          </div>
+          <div class="var-wipe" id="varWipe"><div class="render-empty">新增第二個方案後即可對照</div></div>
+          <div class="var-table" id="varTable"></div>
+        </section>
+      </div>
     </div>
   </div>
 
