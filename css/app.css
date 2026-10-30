@@ -100,7 +100,8 @@ input, select, textarea { font: inherit; color: inherit; }
 .view-3d { background: #e9edf1; }
 .view canvas { display: block; touch-action: none; outline: none; }
 .view-label { position: absolute; left: 10px; top: 8px; font-size: 11px; font-weight: 600; color: #4b5563; background: rgba(255,255,255,.8); padding: 2px 8px; border-radius: 6px; pointer-events: none; }
-.view-tools { position: absolute; right: 8px; top: 8px; display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; max-width: 80%; }
+/* 工具按鈕換行時讓出左上角的畫面標籤（約 100px） */
+.view-tools { position: absolute; right: 8px; top: 8px; display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; max-width: min(80%, calc(100% - 100px)); }
 .view-tools .icon-btn, .view-tools .btn { background: rgba(255,255,255,.92); color: #1f2937; border-color: #d6d9de; }
 .view-tools .btn.on { background: var(--accent); color: #fff; border-color: var(--accent); }
 .tool-hint { position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%); background: rgba(17,24,39,.82); color: #fff; font-size: 12px; padding: 5px 12px; border-radius: 999px; pointer-events: none; white-space: nowrap; max-width: 95%; overflow: hidden; text-overflow: ellipsis; }
