@@ -9,7 +9,7 @@ import { ThumbStudio, THUMB_SIZE, looksBroken, thumbKey, thumbCacheGetAll, thumb
 import { STYLES, STYLE_MAP, paletteFor } from './data/styles.js';
 import { SAMPLES } from './data/samples.js';
 import { detectRooms, polygonArea, polygonCentroid, pointInPolygon, wallLength, clamp, areaText, toWallLocal, PING, largestInnerRect } from './core/geometry.js';
-import { nearestWall, roomAt, wallOnRoom, wallSideToward, scaleProject } from './core/model.js';
+import { nearestWall, roomAt, wallOnRoom, wallSideToward, scaleProject, projectBounds } from './core/model.js';
 import { autoDesign, analyzeRooms, ROOM_TYPES } from './ai/designer.js';
 import * as claude from './ai/claude.js';
 import { DesignAssistant } from './ai/assistant.js';
@@ -27,6 +27,9 @@ import { pickEncoder } from './editor/mp4-mux.js';
 import { longLink, shortLink, readShareFromUrl, getGithubToken, setGithubToken, siteUrl } from './core/share.js';
 import { makeQR, qrToCanvas } from './core/qrcode.js';
 import { computeBudget, budgetCSV, TIERS, EXTRAS } from './editor/budget.js';
+import { ensureVariants, addVariant, switchVariant, renameVariant, deleteVariant, variantData, withVariant } from './core/variants.js';
+import { checkFengshui } from './editor/fengshui.js';
+import { checkClearance } from './editor/clearance.js';
 import { RenderStudio, RENDER_TIMES, RENDER_QUALITY, RENDER_ASPECTS, RENDER_ENGINES, RENDER_TONES } from './editor/render.js';
 import { analyzeFloorplan, buildProject, estimateScale, loadImageData } from './ai/floorplan-import.js';
 
@@ -81,6 +84,7 @@ class App {
       else this.refreshPropValues();
       if (['load', 'design', 'room', 'history', 'edit'].includes(reason)) this.renderRoomTypes();
       if (!['move', 'resize'].includes(reason)) this.syncToggles();
+      if (['design', 'load', 'history', 'settings'].includes(reason)) this.renderVariantBar();
       this.updateStatus();
     });
     store.on('history', () => this.updateHistoryButtons());
@@ -972,6 +976,7 @@ class App {
         fengshui: () => this.fsPanel.toggle(),
         clearance: () => this.clPanel.toggle(),
         budget: () => this.openBudget(),
+        variants: () => this.openVariants(),
         share: () => this.openShare(),
         keepShared: () => this.keepShared(),
         leaveShared: () => { location.href = siteUrl(); },
@@ -1232,6 +1237,217 @@ class App {
     store.update((p) => tweakLighting(p, { lamps: { [id]: on ? 1 : 0 } }), 'settings');
     toast(`${on ? '開燈' : '關燈'}：${it?.name || '燈具'}`);
     if (this.lightPanel.active) this.lightPanel.render();
+  }
+
+  // ------------------------------------------------------------ 方案管理與對照
+  // 目前 3D 畫面的縮圖（方案卡片用）
+  variantThumb() {
+    try {
+      const src = this.view3d.canvas;
+      if (!src.width || !src.height) return null;
+      this.view3d.renderer.render(this.view3d.scene, this.view3d.camera);
+      const c = document.createElement('canvas');
+      c.width = 320; c.height = Math.round((320 * src.height) / src.width);
+      c.getContext('2d').drawImage(src, 0, 0, c.width, c.height);
+      return c.toDataURL('image/jpeg', 0.75);
+    } catch { return null; }
+  }
+
+  // 3D 畫面左上角的方案切換列（有兩個以上方案時顯示）
+  renderVariantBar() {
+    const P = store.project, bar = $('#variantBar');
+    if (!bar) return;
+    const list = P.variants || [];
+    bar.hidden = list.length < 2;
+    if (bar.hidden) return;
+    bar.innerHTML = list.map((v) => `<button type="button" data-varsw="${v.id}" class="${v.id === P.activeVariant ? 'on' : ''}" title="切換到${esc(v.name)}">${esc(v.name)}</button>`).join('')
+      + '<button type="button" data-action="variants" title="方案管理與對照">對照</button>';
+    if (!this.varBarBound) {
+      this.varBarBound = true;
+      bar.addEventListener('click', (e) => {
+        const id = e.target.closest('[data-varsw]')?.dataset.varsw;
+        if (id) { switchVariant(id, this.variantThumb()); toast(`已切換到${store.project.variants.find((v) => v.id === id)?.name}`); }
+      });
+    }
+  }
+
+  openVariants() {
+    const m = $('#variantModal');
+    if (!this.varBound) {
+      this.varBound = true;
+      this.varView = 'persp';
+      m.addEventListener('click', (e) => {
+        if (e.target === m || e.target.closest('[data-var="close"]')) { m.hidden = true; return; }
+        const b = e.target.closest('[data-var]');
+        const vb = e.target.closest('[data-view]');
+        if (vb) { this.varView = vb.dataset.view; for (const x of m.querySelectorAll('[data-view]')) x.classList.toggle('on', x === vb); this.renderWipe(); return; }
+        if (!b) return;
+        const id = b.dataset.id, a = b.dataset.var;
+        if (a === 'add') { addVariant(null, this.variantThumb()); this.renderVariants(true); toast(`已新增${activeName()}，目前的修改會存在這個方案`); }
+        else if (a === 'switch') { switchVariant(id, this.variantThumb()); this.renderVariants(); }
+        else if (a === 'rename') { const v = store.project.variants.find((x) => x.id === id); const n = prompt('方案名稱', v?.name || ''); if (n) { renameVariant(id, n); this.renderVariants(); } }
+        else if (a === 'delete') { const v = store.project.variants.find((x) => x.id === id); if (confirm(`刪除「${v?.name}」？此動作可用復原（Ctrl+Z）還原。`)) { deleteVariant(id); this.renderVariants(true); } }
+      });
+      for (const id of ['#varA', '#varB']) $(id).addEventListener('change', () => this.renderCompare());
+      const activeName = () => store.project.variants.find((v) => v.id === store.project.activeVariant)?.name || '';
+    }
+    store.update((P) => ensureVariants(P), 'settings');
+    // 目前方案的縮圖
+    const cur = store.project.variants.find((v) => v.id === store.project.activeVariant);
+    if (cur && !cur.thumb) cur.thumb = this.variantThumb();
+    m.hidden = false;
+    this.renderVariants(true);
+  }
+
+  // 方案的評估指標（預算、風水、動線）
+  variantMetrics(v) {
+    const data = variantData(v);
+    const P = { ...store.project, ...data };
+    const budget = computeBudget(P), fs = checkFengshui(P), cl = checkClearance(P);
+    return { data, P, budget, fs, cl };
+  }
+
+  renderVariants(resetPick = false) {
+    const P = store.project, list = P.variants || [];
+    const fmt = (n) => Math.round(n).toLocaleString('zh-TW');
+    this.varMetrics = new Map(list.map((v) => [v.id, this.variantMetrics(v)]));
+    $('#varList').innerHTML = list.map((v) => {
+      const mt = this.varMetrics.get(v.id), on = v.id === P.activeVariant;
+      return `<div class="var-item ${on ? 'on' : ''}">
+        ${v.thumb ? `<img src="${v.thumb}" alt="${esc(v.name)}">` : '<div class="var-noimg">尚無縮圖</div>'}
+        <div class="var-info"><b>${esc(v.name)}</b>${on ? '（目前）' : ''}<br>
+          ${esc(STYLE_NAME(mt.P.design.styleId))} · 家具 ${mt.P.items.length} 件<br>
+          預算約 ${fmt(mt.budget.total / 10000)} 萬 · 風水 ${mt.fs.score} · 動線 ${mt.cl.score}</div>
+        <div class="btn-row">
+          ${on ? '' : `<button type="button" class="btn small primary" data-var="switch" data-id="${v.id}">切換到此方案</button>`}
+          <button type="button" class="btn small" data-var="rename" data-id="${v.id}">改名</button>
+          ${list.length > 1 ? `<button type="button" class="btn small" data-var="delete" data-id="${v.id}">刪除</button>` : ''}
+        </div></div>`;
+    }).join('') + '<button type="button" class="var-add" data-var="add">＋ 以目前設計新增方案<br><span class="hint">複製目前方案，再修改成另一種配置或風格</span></button>';
+    const opts = list.map((v) => `<option value="${v.id}">${esc(v.name)}</option>`).join('');
+    const a = $('#varA').value, b = $('#varB').value;
+    $('#varA').innerHTML = opts; $('#varB').innerHTML = opts;
+    const ids = list.map((v) => v.id);
+    if (!resetPick && ids.includes(a) && ids.includes(b)) { $('#varA').value = a; $('#varB').value = b; }
+    else if (ids.length >= 2) {
+      // 預設依方案順序：第一個方案與目前方案（目前就是第一個時取第二個）
+      const second = P.activeVariant !== ids[0] ? P.activeVariant : ids[1];
+      $('#varA').value = ids[0]; $('#varB').value = second;
+    }
+    this.renderVariantBar();
+    this.renderCompare();
+  }
+
+  // 以目前視角算出方案的透視圖與俯視圖（暫時套用方案內容，不影響專案）
+  renderVariantImages(data) {
+    const v = this.view3d, cam = v.camera;
+    const saved = { pos: cam.position.clone(), quat: cam.quaternion.clone(), target: v.controls.target.clone() };
+    // 固定以 16:9 橫幅算圖，不受分割畫面中 3D 窗格寬窄影響
+    v.renderer.setSize(1280, 720, false);
+    cam.aspect = 16 / 9;
+    cam.updateProjectionMatrix();
+    const shot = () => { v.sync(); v.renderer.render(v.scene, cam); return v.canvas.toDataURL('image/jpeg', 0.88); };
+    try {
+      const persp = withVariant(data, shot);
+      // 俯視：矮牆、正上方
+      const top = withVariant({ ...data, settings: { ...data.settings, cutaway: true } }, () => {
+        const mode = v.mode;
+        if (mode === 'walk') v.mode = 'orbit';
+        v.topView();
+        // 依 16:9 畫面讓整個平面完整入鏡
+        const b = projectBounds(store.project), t = Math.tan((cam.fov * Math.PI) / 360);
+        const h = Math.max(((b.y1 - b.y0) * 0.01) / 2 / t, ((b.x1 - b.x0) * 0.01) / 2 / (t * cam.aspect)) * 1.12 + 1;
+        cam.position.y = h;
+        cam.lookAt(v.controls.target);
+        cam.updateMatrixWorld();
+        try { return shot(); } finally { v.mode = mode; }
+      });
+      return { persp, top };
+    } finally {
+      cam.position.copy(saved.pos); cam.quaternion.copy(saved.quat); v.controls.target.copy(saved.target);
+      cam.updateMatrixWorld();
+      v.resize();
+      v.sync();
+      v.needsSync = true;
+      v.live.activity?.(true);
+    }
+  }
+
+  renderCompare() {
+    const list = store.project.variants || [];
+    const A = list.find((v) => v.id === $('#varA').value), B = list.find((v) => v.id === $('#varB').value);
+    if (list.length < 2 || !A || !B) {
+      $('#varWipe').innerHTML = '<div class="render-empty">新增第二個方案後即可對照</div>';
+      $('#varTable').innerHTML = '';
+      return;
+    }
+    const mA = this.varMetrics.get(A.id), mB = this.varMetrics.get(B.id);
+    this.varImgs = { A: this.renderVariantImages(mA.data), B: this.renderVariantImages(mB.data), nameA: A.name, nameB: B.name };
+    this.renderWipe();
+    // 指標對照：數字較好的標綠色
+    const fmt = (n) => Math.round(n).toLocaleString('zh-TW');
+    const row = (label, a, b, better = null, f = (x) => x) => {
+      const cls = (x, y) => (better === null || x === y ? '' : (better === 'low' ? x < y : x > y) ? 'better' : '');
+      return `<tr><th>${label}</th><td class="n ${cls(a, b)}">${f(a)}</td><td class="n ${cls(b, a)}">${f(b)}</td></tr>`;
+    };
+    const cats = [...new Set([...mA.budget.groups, ...mB.budget.groups].map((g) => g.name))];
+    const sub = (m, n) => m.budget.groups.find((g) => g.name === n)?.subtotal || 0;
+    $('#varTable').innerHTML = `<table>
+      <thead><tr><th></th><th class="n">${esc(A.name)}</th><th class="n">${esc(B.name)}</th></tr></thead>
+      <tbody>
+        <tr><th>風格</th><td class="n">${esc(STYLE_NAME(mA.P.design.styleId))}</td><td class="n">${esc(STYLE_NAME(mB.P.design.styleId))}</td></tr>
+        ${row('家具件數', mA.P.items.length, mB.P.items.length)}
+        ${row('預算總計（元）', mA.budget.total, mB.budget.total, 'low', fmt)}
+        ${row('每坪單價（元）', mA.budget.perPing, mB.budget.perPing, 'low', fmt)}
+        ${cats.map((n) => row(`　${n}`, sub(mA, n), sub(mB, n), 'low', fmt)).join('')}
+        ${row('風水分數', mA.fs.score, mB.fs.score, 'high')}
+        ${row('動線健檢分數', mA.cl.score, mB.cl.score, 'high')}
+        <tr><th>風水需注意</th><td class="n">${esc(mA.fs.findings.filter((f) => f.level === 'warn').map((f) => f.title).join('、') || '無')}</td><td class="n">${esc(mB.fs.findings.filter((f) => f.level === 'warn').map((f) => f.title).join('、') || '無')}</td></tr>
+        <tr><th>動線需注意</th><td class="n">${mA.cl.findings.filter((f) => f.level === 'warn').length} 項</td><td class="n">${mB.cl.findings.filter((f) => f.level === 'warn').length} 項</td></tr>
+      </tbody></table>
+      <h4 style="margin:12px 0 0">主要差異</h4>
+      <ul class="var-diffs">${this.variantDiffs(mA.P, mB.P, A.name, B.name).map((d) => `<li>${esc(d)}</li>`).join('') || '<li>兩個方案內容相同</li>'}</ul>`;
+  }
+
+  // 列出兩個方案的差異：風格、各房間地坪與牆面、家具增減
+  variantDiffs(PA, PB, nA, nB) {
+    const out = [];
+    const matName = (id) => MATERIAL_MAP[id]?.name || id || '預設';
+    if (PA.design.styleId !== PB.design.styleId) out.push(`風格：${nA}為${STYLE_NAME(PA.design.styleId)}，${nB}為${STYLE_NAME(PB.design.styleId)}`);
+    for (const ra of PA.rooms) {
+      const rb = PB.rooms.find((r) => r.id === ra.id);
+      if (!rb) { out.push(`${ra.name}：只在${nA}`); continue; }
+      if ((ra.floor || '') !== (rb.floor || '')) out.push(`${ra.name}地坪：${matName(ra.floor)} → ${matName(rb.floor)}`);
+    }
+    for (const rb of PB.rooms) if (!PA.rooms.some((r) => r.id === rb.id)) out.push(`${rb.name}：只在${nB}`);
+    const wallMats = (P) => { const m = new Map(); for (const w of P.walls) for (const k of [w.matA, w.matB]) m.set(k || 'paint_white', (m.get(k || 'paint_white') || 0) + 1); return m; };
+    const wa = wallMats(PA), wb = wallMats(PB);
+    for (const k of new Set([...wa.keys(), ...wb.keys()])) if ((wa.get(k) || 0) !== (wb.get(k) || 0)) out.push(`牆面${matName(k)}：${wa.get(k) || 0} 面 → ${wb.get(k) || 0} 面`);
+    const count = (P) => { const m = new Map(); for (const it of P.items) m.set(it.kind, (m.get(it.kind) || 0) + 1); return m; };
+    const ca = count(PA), cb = count(PB);
+    for (const k of new Set([...ca.keys(), ...cb.keys()])) {
+      const a = ca.get(k) || 0, b = cb.get(k) || 0;
+      if (a !== b) out.push(`${CATALOG_MAP[k]?.name || k}：${a} 件 → ${b} 件`);
+    }
+    // 同一件家具移動位置
+    const moved = PA.items.filter((a) => { const b = PB.items.find((x) => x.id === a.id); return b && (Math.hypot(a.x - b.x, a.y - b.y) > 20 || (a.rot || 0) !== (b.rot || 0)); });
+    if (moved.length) out.push(`移動或轉向的家具：${[...new Set(moved.map((x) => x.name || CATALOG_MAP[x.kind]?.name))].slice(0, 8).join('、')}${moved.length > 8 ? ' 等' : ''}`);
+    return out;
+  }
+
+  // 滑桿左右比較：左邊方案 A、右邊方案 B
+  renderWipe() {
+    const I = this.varImgs;
+    if (!I) return;
+    const k = this.varView === 'top' ? 'top' : 'persp';
+    const box = $('#varWipe');
+    box.innerHTML = `<img src="${I.B[k]}" alt="${esc(I.nameB)}"><div class="var-top"><img src="${I.A[k]}" alt="${esc(I.nameA)}"></div>
+      <div class="var-line"></div><span class="var-tag" style="left:8px">${esc(I.nameA)}</span><span class="var-tag" style="right:8px">${esc(I.nameB)}</span>
+      <input type="range" min="0" max="100" value="50" aria-label="左右比較">`;
+    const top = box.querySelector('.var-top'), line = box.querySelector('.var-line'), r = box.querySelector('input');
+    const set = () => { top.style.clipPath = `inset(0 ${100 - r.value}% 0 0)`; line.style.left = `calc(${r.value}% - 1px)`; };
+    r.addEventListener('input', set);
+    set();
   }
 
   // ------------------------------------------------------------ 預算與材料清單
@@ -2100,6 +2316,7 @@ class App {
       if (!$('#tourModal').hidden) { if (e.key === 'Escape') this.closeTour(); return; }
       if (!$('#shareModal').hidden) { if (e.key === 'Escape') $('#shareModal').hidden = true; return; }
       if (!$('#budgetModal').hidden) { if (e.key === 'Escape') $('#budgetModal').hidden = true; return; }
+      if (!$('#variantModal').hidden) { if (e.key === 'Escape') $('#variantModal').hidden = true; return; }
       if (!$('#updateModal').hidden) { if (e.key === 'Escape') $('#updateModal').querySelector('[data-update="later"], [data-update="close"]')?.click(); return; }
       const ctrl = e.ctrlKey || e.metaKey;
       if (this.view3d.mode === 'walk') {
@@ -2174,3 +2391,6 @@ function renderMarkdown(md) {
 }
 
 window.app = new App();
+
+// 風格名稱（方案對照用）
+const STYLE_NAME = (id) => STYLE_MAP[id]?.name || '未指定風格';

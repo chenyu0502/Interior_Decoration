@@ -16,6 +16,8 @@ export function setGithubToken(t) {
 // 分享用的專案資料：不含底圖（圖片太大），其餘照原樣
 export function sharePayload(project) {
   const { background, ...rest } = project;
+  // 方案的縮圖是圖片，不放進分享資料
+  if (Array.isArray(rest.variants)) rest.variants = rest.variants.map(({ thumb, ...v }) => v);
   return rest;
 }
 
