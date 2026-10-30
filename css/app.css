@@ -416,6 +416,7 @@ input, select, textarea { font: inherit; color: inherit; }
 .quote-grid span, .quote-terms span { color: var(--muted); font-size: 12px; }
 .quote-box input:not([type=checkbox]):not([type=radio]), .quote-box textarea { font: inherit; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--text); min-width: 0; }
 .quote-box textarea { resize: vertical; }
+.quote-box input.invalid { border-color: #dc2626; background: rgba(220,38,38,.06); }
 .quote-logo { grid-column: 1 / -1; display: grid; gap: 3px; }
 .quote-logo > span { color: var(--muted); font-size: 12px; }
 .quote-logo > div { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }

@@ -1,10 +1,10 @@
 // 報價單：把預算清單排成可列印的報價單（報價總表、各房間或各工程類別明細、稅金、條款與簽章欄）。
 // 公司 Logo 存在瀏覽器（localStorage，所有專案共用），不放進專案檔。
-// 報價單資訊存在 project.settings.budget.quote = { company, contact, client, site, phone, terms, tax, pageBreak, photos, validDays }。
+// 報價單資訊存在 project.settings.budget.quote = { company, taxId, companyAddr, contact, client, site, phone, terms, tax, pageBreak, photos, validDays }。
 import { TIERS } from './budget.js';
 
 export const QUOTE_DEFAULTS = {
-  company: '', contact: '', client: '', site: '', phone: '',
+  company: '', taxId: '', companyAddr: '', contact: '', client: '', site: '', phone: '',
   terms: '1. 本報價單有效期限依上方日期計算，逾期請重新報價。\n2. 付款方式：簽約 30%、進場施工 40%、完工驗收 30%。\n3. 未列於本報價單的項目另行報價；現場丈量後數量如有差異，依實際數量計價。\n4. 單價含材料與施工，實際以簽約內容為準。',
   tax: true, pageBreak: true, photos: true, validDays: 30,
 };
@@ -62,6 +62,7 @@ export function quoteHTML(P, r, mode, notes = {}, logo = '') {
     const sub = mode === 'room' ? l.group : '';
     return `${sub ? `<span class="sub">${esc(sub)}</span>` : ''}${n?.text ? `<div class="nt">${esc(n.text)}</div>` : ''}${o.photos && n?.photos?.length ? `<div class="ph">${n.photos.map((src) => `<img src="${src}" alt="">`).join('')}</div>` : ''}`;
   };
+  const coInfo = [o.taxId && `統一編號：${esc(o.taxId)}`, o.companyAddr && `地址：${esc(o.companyAddr)}`].filter(Boolean).join('<br>');
   const info = [['業主', o.client], ['案場地址', o.site], ['聯絡電話', o.phone], ['報價單位', o.company], ['報價人', o.contact]];
 
   return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><title>${esc(name)} 報價單 ${no}</title>
@@ -73,6 +74,7 @@ body { font-family: "Microsoft JhengHei", "PingFang TC", "Noto Sans TC", sans-se
 header { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 3px solid #111; padding-bottom: 8px; margin-bottom: 12px; }
 header h1 { font-size: 24px; letter-spacing: 8px; margin: 0; }
 header .co { font-size: 15px; font-weight: 700; }
+header .co-info { font-size: 11px; color: #333; line-height: 1.5; margin: 2px 0 4px; }
 header .brand { display: flex; align-items: center; gap: 12px; }
 header .logo { max-height: 64px; max-width: 200px; object-fit: contain; }
 header .meta { text-align: right; font-size: 11px; color: #333; line-height: 1.6; }
@@ -103,7 +105,7 @@ tr { break-inside: avoid; }
 .foot { margin-top: 10px; color: #666; font-size: 10px; }
 </style></head><body>
 <header>
-  <div class="brand">${logo ? `<img class="logo" src="${logo}" alt="${esc(o.company || 'Logo')}">` : ''}<div><div class="co">${esc(o.company || '')}</div><h1>報價單</h1></div></div>
+  <div class="brand">${logo ? `<img class="logo" src="${logo}" alt="${esc(o.company || 'Logo')}">` : ''}<div><div class="co">${esc(o.company || '')}</div>${coInfo ? `<div class="co-info">${coInfo}</div>` : ''}<h1>報價單</h1></div></div>
   <div class="meta">報價單號：${no}<br>報價日期：${dateText(today)}<br>有效期限：${dateText(until)}</div>
 </header>
 <div class="info">
@@ -137,4 +139,13 @@ ${o.terms ? `<div class="terms"><b>報價說明</b>\n${esc(o.terms)}</div>` : ''
 <div class="sign"><div>業主簽章：</div><div>報價單位簽章：</div></div>
 <div class="foot">本報價單由 Interior Studio 依平面圖自動計算數量產生。</div>
 </body></html>`;
+}
+
+// 統一編號檢查（財政部規則：權數 1、2、1、2、1、2、4、1，各積的數字相加後可被 5 整除；第 7 碼為 7 時加 1 也可）
+export function validTaxId(id) {
+  if (!/^\d{8}$/.test(id)) return false;
+  const W = [1, 2, 1, 2, 1, 2, 4, 1];
+  let sum = 0;
+  for (let i = 0; i < 8; i++) { const p = Number(id[i]) * W[i]; sum += Math.floor(p / 10) + (p % 10); }
+  return sum % 5 === 0 || (id[6] === '7' && (sum + 1) % 5 === 0);
 }

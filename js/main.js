@@ -27,7 +27,7 @@ import { pickEncoder } from './editor/mp4-mux.js';
 import { longLink, shortLink, readShareFromUrl, getGithubToken, setGithubToken, siteUrl } from './core/share.js';
 import { makeQR, qrToCanvas } from './core/qrcode.js';
 import { computeBudget, budgetCSV, TIERS, GROUPS } from './editor/budget.js';
-import { quoteHTML, quoteOptions } from './editor/quote.js';
+import { quoteHTML, quoteOptions, validTaxId } from './editor/quote.js';
 import { ensureVariants, addVariant, switchVariant, renameVariant, deleteVariant, variantData, withVariant } from './core/variants.js';
 import { checkFengshui } from './editor/fengshui.js';
 import { checkClearance } from './editor/clearance.js';
@@ -1665,6 +1665,8 @@ class App {
         <div class="quote-grid">
           ${field('client', '業主', '業主姓名')}${field('phone', '聯絡電話')}
           ${field('site', '案場地址')}${field('company', '報價單位', '公司或工作室名稱')}
+          <label><span>統一編號</span><input data-q="taxId" value="${esc(o.taxId)}" inputmode="numeric" maxlength="8" placeholder="8 碼數字"></label>
+          ${field('companyAddr', '公司地址')}
           <div class="quote-logo"><span>公司 Logo</span>
             <div>${quoteLogo() ? `<img src="${quoteLogo()}" alt="公司 Logo">` : '<em>尚未設定</em>'}
               <label class="btn small">${quoteLogo() ? '更換' : '上傳'}<input type="file" accept="image/*" data-quote-logo hidden></label>
@@ -1693,9 +1695,14 @@ class App {
     const q = {};
     for (const i of el.querySelectorAll('[data-q]')) {
       const k = i.dataset.q;
-      q[k] = i.type === 'checkbox' ? i.checked : k === 'validDays' ? Math.min(365, Math.max(1, Number(i.value) || 30)) : i.value.trim().slice(0, k === 'terms' ? 2000 : 80);
+      q[k] = i.type === 'checkbox' ? i.checked : k === 'validDays' ? Math.min(365, Math.max(1, Number(i.value) || 30)) : i.value.trim().slice(0, k === 'terms' ? 2000 : k === 'taxId' ? 8 : 80);
     }
     store.update((p) => { p.settings.budget = { ...(p.settings.budget || {}), quote: q }; }, 'settings');
+    // 統一編號格式或檢查碼不符時提醒（仍照填寫內容儲存）
+    const tax = el.querySelector('[data-q=taxId]');
+    const bad = !!q.taxId && !validTaxId(q.taxId);
+    tax.classList.toggle('invalid', bad);
+    tax.title = bad ? '統一編號應為 8 碼數字，且檢查碼需正確，請再確認' : '';
   }
 
   openQuote(mode) {
