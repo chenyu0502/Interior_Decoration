@@ -153,7 +153,7 @@ input, select, textarea { font: inherit; color: inherit; }
 .light-lamp { display: flex; align-items: center; gap: 6px; }
 .light-lamp input[type=range] { width: 90px; margin-left: auto; }
 .light-list > .hint { flex-basis: 100%; }
-.view-tools .btn.on#fsBtn { background: #7c3aed; border-color: #7c3aed; }
+.view-tools .btn.on#fsBtn, .view-tools .btn.on#clBtn { background: #7c3aed; border-color: #7c3aed; }
 .fs-score { font-weight: 700; padding: 1px 10px; border-radius: 999px; color: #fff; font-size: 12px; }
 .fs-score.fs-good { background: #16a34a; } .fs-score.fs-ok { background: #d97706; } .fs-score.fs-bad { background: #dc2626; }
 .fs-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 8px; margin-top: 6px; max-height: 26vh; overflow-y: auto; }

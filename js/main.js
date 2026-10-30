@@ -16,6 +16,7 @@ import { DesignAssistant } from './ai/assistant.js';
 import { SunPanel } from './ui/sun-panel.js';
 import { LightPanel } from './ui/light-panel.js';
 import { FengshuiPanel } from './ui/fengshui-panel.js';
+import { ClearancePanel } from './ui/clearance-panel.js';
 import { lightingState, tweakLighting } from './editor/lighting.js';
 import { VERSION, CHANGELOG, compareVersions } from './version.js';
 import { Updater } from './core/updater.js';
@@ -61,6 +62,7 @@ class App {
     this.sunPanel = new SunPanel(this);
     this.lightPanel = new LightPanel(this);
     this.fsPanel = new FengshuiPanel(this);
+    this.clPanel = new ClearancePanel(this);
     this.selectedStyle = null;
     this.catFilter = 'all';
     this.buildCatalogUI();
@@ -966,6 +968,7 @@ class App {
         sun: () => this.sunPanel.toggle(),
         tour: () => this.openTour(),
         fengshui: () => this.fsPanel.toggle(),
+        clearance: () => this.clPanel.toggle(),
         share: () => this.openShare(),
         keepShared: () => this.keepShared(),
         leaveShared: () => { location.href = siteUrl(); },
@@ -1212,9 +1215,9 @@ class App {
 
   // 畫面底部的停靠面板（日照、燈光、風水）一次只開一個
   closeDocks(except) {
-    for (const p of [this.sunPanel, this.lightPanel, this.fsPanel]) if (p && p !== except && p.active) p.toggle(false);
+    for (const p of [this.sunPanel, this.lightPanel, this.fsPanel, this.clPanel]) if (p && p !== except && p.active) p.toggle(false);
   }
-  anyDockOpen() { return [this.sunPanel, this.lightPanel, this.fsPanel].some((p) => p?.active); }
+  anyDockOpen() { return [this.sunPanel, this.lightPanel, this.fsPanel, this.clPanel].some((p) => p?.active); }
 
   // 漫遊時點燈具：開燈 / 關燈（白天情境不開燈）
   toggleLamp(id) {
