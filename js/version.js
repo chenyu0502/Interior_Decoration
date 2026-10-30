@@ -5,9 +5,16 @@
 //   次版號：新增功能
 //   修訂號：錯誤修正
 
-export const VERSION = '1.36.0';
+export const VERSION = '1.36.1';
 
 export const CHANGELOG = [
+  {
+    version: '1.36.1',
+    date: '2026-10-30',
+    notes: [
+      '方案切換列改到 3D 畫面左下角垂直排列，不再壓到右上角的天花板、日照等按鈕；手機漫遊時暫時隱藏，避免擋住搖桿。',
+    ],
+  },
   {
     version: '1.36.0',
     date: '2026-10-30',
