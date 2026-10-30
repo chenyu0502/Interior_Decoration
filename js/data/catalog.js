@@ -477,8 +477,9 @@ function buildCabinet(k, w, d, h, { doors = 0, drawers = 0, legH = null, body = 
     const shoes = contents === 'shoes';
     const nShelf = shoes ? Math.max(2, Math.floor(bh / 26) - 1) : tall ? (d >= 50 ? 1 : Math.max(2, Math.round(bh / 45) - 1)) : 1;
     carcass(k, w, bh, cd, 0, lh, cz, bodyMat, { shelves: nShelf });
-    if (contents === 'clothes' || (!contents && tall && d >= 50)) fillWardrobe(k, w, bh, cd, lh, cz);
-    if (shoes) {
+    // opts.noContents：門關著看不到的櫃內物品（衣服、鞋子）不建模，例如 AR 模型（減少面數）
+    if (!k.opts.noContents && (contents === 'clothes' || (!contents && tall && d >= 50))) fillWardrobe(k, w, bh, cd, lh, cz);
+    if (shoes && !k.opts.noContents) {
       // 鞋櫃：每層放幾雙鞋（底板與各層板的上緣）
       const levels = [lh + 1.8];
       for (let i = 1; i <= nShelf; i++) levels.push(lh + (bh * i) / (nShelf + 1) + 0.9);
