@@ -26,6 +26,7 @@ import { TourPlayer, planTour, pickMime, tourSteps, viewTargets, previewStop } f
 import { pickEncoder } from './editor/mp4-mux.js';
 import { longLink, shortLink, readShareFromUrl, getGithubToken, setGithubToken, siteUrl } from './core/share.js';
 import { makeQR, qrToCanvas } from './core/qrcode.js';
+import { computeBudget, budgetCSV, TIERS, EXTRAS } from './editor/budget.js';
 import { RenderStudio, RENDER_TIMES, RENDER_QUALITY, RENDER_ASPECTS, RENDER_ENGINES, RENDER_TONES } from './editor/render.js';
 import { analyzeFloorplan, buildProject, estimateScale, loadImageData } from './ai/floorplan-import.js';
 
@@ -641,6 +642,7 @@ class App {
         <p class="hint">整張平面圖等比縮放，牆厚、門窗與家具尺寸不變。也可以選取一面牆、一段量尺或一個房間，輸入實際長度或坪數校正。可按 Ctrl+Z 復原。</p>
       </section>
       ${P.design.report ? '<div class="btn-row"><button class="btn" id="showReport">查看 AI 設計建議書</button></div>' : ''}
+      <div class="btn-row"><button class="btn" data-action="budget">預算與材料清單</button></div>
       <section><p class="hint"><b>快速上手</b><br>1. 用「畫牆」或「房間」工具畫出平面（或從「檔案 → 範例平面圖」開始、或匯入平面圖底圖描圖）。<br>2. 從左側拖曳門窗到牆上、拖曳家具到房間。<br>3. 到「AI 風格」選擇風格，一鍵自動配置。<br>4. 右側 3D 畫面可環繞、漫遊、直接拖拉家具。</p></section></div>`;
   }
 
@@ -969,6 +971,7 @@ class App {
         tour: () => this.openTour(),
         fengshui: () => this.fsPanel.toggle(),
         clearance: () => this.clPanel.toggle(),
+        budget: () => this.openBudget(),
         share: () => this.openShare(),
         keepShared: () => this.keepShared(),
         leaveShared: () => { location.href = siteUrl(); },
@@ -1229,6 +1232,89 @@ class App {
     store.update((p) => tweakLighting(p, { lamps: { [id]: on ? 1 : 0 } }), 'settings');
     toast(`${on ? '開燈' : '關燈'}：${it?.name || '燈具'}`);
     if (this.lightPanel.active) this.lightPanel.render();
+  }
+
+  // ------------------------------------------------------------ 預算與材料清單
+  openBudget() {
+    const m = $('#budgetModal');
+    if (!this.budgetBound) {
+      this.budgetBound = true;
+      m.addEventListener('click', (e) => {
+        if (e.target === m || e.target.closest('[data-budget="close"]')) { m.hidden = true; return; }
+        const a = e.target.closest('[data-budget]')?.dataset.budget;
+        if (a === 'csv') download(URL.createObjectURL(new Blob([budgetCSV(store.project)], { type: 'text/csv' })), `${store.project.name || '室內設計'}-預算與材料清單.csv`);
+        else if (a === 'print') this.printBudget();
+        else if (a === 'reset') { if (confirm('恢復所有預設單價？')) this.editBudget((B) => { B.prices = {}; }); }
+        const reset = e.target.closest('[data-reset]');
+        if (reset) this.editBudget((B) => { delete B.prices[reset.dataset.reset]; });
+      });
+      m.addEventListener('change', (e) => {
+        const t = e.target;
+        if (t.id === 'bTier') this.editBudget((B) => { B.tier = t.value; });
+        else if (t.id === 'bCeiling') this.editBudget((B) => { B.ceiling = t.checked; });
+        else if (t.dataset.extra) this.editBudget((B) => { B.extras[t.dataset.extra] = t.checked; });
+        else if (t.dataset.price) {
+          const v = Math.max(0, Math.round(Number(t.value)));
+          if (Number.isFinite(v)) this.editBudget((B) => { B.prices[t.dataset.price] = v; });
+        }
+      });
+    }
+    m.hidden = false;
+    this.renderBudget();
+  }
+
+  editBudget(fn) {
+    store.update((p) => {
+      const B = p.settings.budget || {};
+      B.prices = B.prices || {}; B.extras = B.extras || {};
+      fn(B);
+      p.settings.budget = B;
+    }, 'settings');
+    this.renderBudget();
+  }
+
+  renderBudget() {
+    const P = store.project, B = P.settings.budget || {};
+    const r = computeBudget(P);
+    const fmt = (n) => Math.round(n).toLocaleString('zh-TW');
+    const num = (q) => (Number.isInteger(q) ? q : q.toFixed(2));
+    $('#budgetOpts').innerHTML = `
+      <label>價位等級 <select id="bTier">${Object.entries(TIERS).map(([k, t]) => `<option value="${k}" ${r.tier === k ? 'selected' : ''}>${t.name}</option>`).join('')}</select></label>
+      <label class="check"><input type="checkbox" id="bCeiling" ${B.ceiling !== false ? 'checked' : ''}> 天花板工程</label>
+      ${EXTRAS.map((x) => `<label class="check"><input type="checkbox" data-extra="${x.id}" ${(B.extras?.[x.id] ?? x.on) ? 'checked' : ''}> ${esc(x.name)}</label>`).join('')}`;
+    $('#budgetBody').innerHTML = `
+      <table class="budget-table">
+        <thead><tr><th>項目</th><th class="n">數量</th><th>單位</th><th class="n">單價（元）</th><th class="n">小計（元）</th></tr></thead>
+        ${r.groups.map((g) => `<tbody>
+          <tr class="bg"><th colspan="4">${esc(g.name)}</th><th class="n">${fmt(g.subtotal)}</th></tr>
+          ${g.lines.map((l) => `<tr>
+            <td>${esc(l.name)}${l.details.length ? `<div class="hint">${esc(l.details.join('、'))}</div>` : ''}</td>
+            <td class="n">${num(l.qty)}${l.waste ? `<div class="hint">含損耗 ${Math.round(l.waste * 100)}%</div>` : ''}</td>
+            <td>${l.unit}</td>
+            <td class="n"><input type="number" min="0" step="100" data-price="${esc(l.key)}" value="${l.price}" aria-label="${esc(l.name)}單價">${Number.isFinite(B.prices?.[l.key]) ? `<button type="button" class="icon-btn" data-reset="${esc(l.key)}" title="恢復預設單價">↺</button>` : ''}</td>
+            <td class="n">${fmt(l.amount)}</td></tr>`).join('')}
+        </tbody>`).join('')}
+      </table>`;
+    $('#budgetTotal').innerHTML = `總計 <b>${fmt(r.total)}</b> 元 <span class="hint">室內約 ${r.area.toFixed(1)} 坪 · 每坪約 ${fmt(r.perPing)} 元</span>`;
+  }
+
+  printBudget() {
+    const r = computeBudget(store.project);
+    const fmt = (n) => Math.round(n).toLocaleString('zh-TW');
+    const w = window.open('', '_blank');
+    if (!w) { toast('瀏覽器擋住了列印視窗，請允許彈出視窗後再試'); return; }
+    w.document.write(`<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><title>${esc(store.project.name || '室內設計')} 預算與材料清單</title>
+      <style>body{font-family:"Microsoft JhengHei","PingFang TC","Noto Sans TC",sans-serif;padding:24px;color:#111}h1{font-size:20px;margin:0 0 4px}p{color:#555;margin:0 0 14px;font-size:12px}
+      table{width:100%;border-collapse:collapse;font-size:12px}th,td{border-bottom:1px solid #ddd;padding:5px 6px;text-align:left;vertical-align:top}.n{text-align:right}.g th{background:#f3f4f6}
+      small{color:#666}tfoot td{font-weight:700;font-size:14px;border-top:2px solid #111}</style></head><body>
+      <h1>${esc(store.project.name || '室內設計')} 預算與材料清單</h1>
+      <p>${TIERS[r.tier].name}價位 · 室內約 ${r.area.toFixed(1)} 坪 · 單價為台灣市場大略行情（含材料與施工），實際以廠商報價為準</p>
+      <table><thead><tr><th>項目</th><th class="n">數量</th><th>單位</th><th class="n">單價</th><th class="n">小計</th></tr></thead>
+      ${r.groups.map((g) => `<tbody><tr class="g"><th colspan="4">${esc(g.name)}</th><th class="n">${fmt(g.subtotal)}</th></tr>${g.lines.map((l) => `<tr><td>${esc(l.name)}${l.details.length ? `<br><small>${esc(l.details.join('、'))}</small>` : ''}</td><td class="n">${Number.isInteger(l.qty) ? l.qty : l.qty.toFixed(2)}</td><td>${l.unit}</td><td class="n">${fmt(l.price)}</td><td class="n">${fmt(l.amount)}</td></tr>`).join('')}</tbody>`).join('')}
+      <tfoot><tr><td colspan="4">總計（每坪約 ${fmt(r.perPing)} 元）</td><td class="n">${fmt(r.total)}</td></tr></tfoot></table></body></html>`);
+    w.document.close();
+    w.focus();
+    setTimeout(() => w.print(), 300);
   }
 
   // ------------------------------------------------------------ 分享連結與 QR code
@@ -2013,6 +2099,7 @@ class App {
       if (!$('#renderModal').hidden) { if (e.key === 'Escape') this.closeRender(); return; }
       if (!$('#tourModal').hidden) { if (e.key === 'Escape') this.closeTour(); return; }
       if (!$('#shareModal').hidden) { if (e.key === 'Escape') $('#shareModal').hidden = true; return; }
+      if (!$('#budgetModal').hidden) { if (e.key === 'Escape') $('#budgetModal').hidden = true; return; }
       if (!$('#updateModal').hidden) { if (e.key === 'Escape') $('#updateModal').querySelector('[data-update="later"], [data-update="close"]')?.click(); return; }
       const ctrl = e.ctrlKey || e.metaKey;
       if (this.view3d.mode === 'walk') {
