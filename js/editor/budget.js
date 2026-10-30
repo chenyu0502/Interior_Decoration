@@ -120,11 +120,12 @@ export function computeBudget(P = store.project) {
   const tier = TIERS[B.tier] || TIERS.standard;
   const priceOf = (key, base) => (Number.isFinite(B.prices?.[key]) ? B.prices[key] : Math.round((base * (key.startsWith('item:') ? tier.item : tier.mat)) / 10) * 10);
   const lines = new Map();
-  const add = (key, group, name, unit, qty, base, { waste = 0, detail = '' } = {}) => {
+  const add = (key, group, name, unit, qty, base, { waste = 0, detail = '', room = detail } = {}) => {
     if (qty <= 0) return;
-    const L = lines.get(key) || { key, group, name, unit, qty: 0, waste, details: new Map(), price: priceOf(key, base), base };
+    const L = lines.get(key) || { key, group, name, unit, qty: 0, waste, details: new Map(), byRoom: new Map(), price: priceOf(key, base), base };
     L.qty += qty;
     if (detail) L.details.set(detail, (L.details.get(detail) || 0) + qty);
+    if (room) L.byRoom.set(room, (L.byRoom.get(room) || 0) + qty);
     lines.set(key, L);
   };
   const rooms = P.rooms.filter((r) => r.points.length >= 3);
@@ -141,24 +142,27 @@ export function computeBudget(P = store.project) {
   {
     for (const r of rooms) add('ceiling', '天花板工程', '平釘天花板（矽酸鈣板含批土油漆）', '坪', ping(Math.abs(polygonArea(r.points))), CEILING, { detail: r.name });
   }
+  const roomAtPt = (x, y) => rooms.find((r) => pointInPolygon(x, y, r.points))?.name || '';
+  const opRooms = openingRooms(P, rooms);
   for (const op of P.openings) {
     const def = OPENING_MAP[op.kind];
     if (!def) continue;
-    if (def.cat === 'door') add(`op:${op.kind}`, '門窗', def.name, '樘', 1, DOOR[op.kind] || 15000);
-    else add(`op:${op.kind}`, '門窗', `氣密窗 · ${def.name}`, '才', ((op.width || def.width) * (op.height || def.height)) / CAI, WINDOW[op.kind] || 1200);
+    const room = opRooms.get(op.id) || '';
+    if (def.cat === 'door') add(`op:${op.kind}`, '門窗', def.name, '樘', 1, DOOR[op.kind] || 15000, { room });
+    else add(`op:${op.kind}`, '門窗', `氣密窗 · ${def.name}`, '才', ((op.width || def.width) * (op.height || def.height)) / CAI, WINDOW[op.kind] || 1200, { room });
   }
   for (const it of P.items) {
     const def = CATALOG_MAP[it.kind];
     if (!def) continue;
-    const g = groupOf(it.kind);
-    if (PER_CHI[it.kind]) add(`item:${it.kind}`, g, def.name, '尺', it.w / CHI, PER_CHI[it.kind]);
-    else add(`item:${it.kind}`, g, def.name, ['dining_chair', 'bar_stool', 'office_chair', 'armchair'].includes(it.kind) ? '張' : '件', 1, EACH[it.kind] || 5000);
+    const g = groupOf(it.kind), room = roomAtPt(it.x, it.y);
+    if (PER_CHI[it.kind]) add(`item:${it.kind}`, g, def.name, '尺', it.w / CHI, PER_CHI[it.kind], { room });
+    else add(`item:${it.kind}`, g, def.name, ['dining_chair', 'bar_stool', 'office_chair', 'armchair'].includes(it.kind) ? '張' : '件', 1, EACH[it.kind] || 5000, { room });
   }
   for (const e of EXTRAS) {
     add(`extra:${e.id}`, '其他工程', e.name, '坪', totalPing, e.per);
   }
   for (const c of B.custom || []) {
-    const L = { key: `custom:${c.id}`, group: GROUPS.includes(c.group) ? c.group : '其他工程', name: c.name || '自訂工程', unit: c.unit || '式', qty: Number(c.qty) || 0, waste: 0, details: new Map(), price: Number(c.price) || 0, custom: true };
+    const L = { key: `custom:${c.id}`, group: GROUPS.includes(c.group) ? c.group : '其他工程', name: c.name || '自訂工程', unit: c.unit || '式', qty: Number(c.qty) || 0, waste: 0, details: new Map(), byRoom: new Map(), price: Number(c.price) || 0, custom: true };
     lines.set(L.key, L);
   }
 
@@ -170,16 +174,63 @@ export function computeBudget(P = store.project) {
     return { name, lines: ls, subtotal: ls.reduce((s, l) => s + (l.on ? l.amount : 0), 0) };
   }).filter((g) => g.lines.length);
   const total = groups.reduce((s, g) => s + g.subtotal, 0);
-  return { groups, total, area: totalPing, perPing: totalPing ? Math.round(total / totalPing) : 0, tier: B.tier || 'standard' };
+  return { groups, rooms: byRoom(groups, rooms), total, area: totalPing, perPing: totalPing ? Math.round(total / totalPing) : 0, tier: B.tier || 'standard' };
+}
+
+const SHARED = '全室共用';
+
+// 依房間分組：每個項目依各房間的數量拆分金額（拆分後尾數歸到最後一個房間，總計不變）；
+// 沒有對應房間的項目（其他工程、自訂工程、房間外的家具）歸到「全室共用」
+function byRoom(groups, rooms) {
+  const out = new Map([...rooms.map((r) => [r.name, []]), [SHARED, []]]);
+  for (const g of groups) {
+    for (const l of g.lines) {
+      const parts = [...l.byRoom].filter(([, q]) => q > 0);
+      const known = parts.reduce((s, [, q]) => s + q, 0);
+      if (l.qtyRaw - known > 1e-6) parts.push([SHARED, l.qtyRaw - known]);
+      let left = l.amount;
+      parts.forEach(([room, q], i) => {
+        const share = q / (l.qtyRaw || 1);
+        const amount = i === parts.length - 1 ? left : Math.round(l.amount * share);
+        left -= amount;
+        const qty = l.unit === '件' || l.unit === '張' || l.unit === '樘' ? q : Math.round(l.qty * share * 100) / 100;
+        if (!out.has(room)) out.set(room, []);
+        out.get(room).push({ ...l, qty, amount, details: [], group: g.name });
+      });
+    }
+  }
+  return [...out].map(([name, lines]) => ({ name, lines, subtotal: lines.reduce((s, l) => s + (l.on ? l.amount : 0), 0) })).filter((g) => g.lines.length);
+}
+
+// 門窗歸屬的房間：窗取所在的房間；門取兩側中門數較少的房間（房門算在臥室、書房，而不是走道或客廳），
+// 門數相同時取面積較小的房間
+function openingRooms(P, rooms) {
+  const sides = new Map(), doors = new Map();
+  for (const op of P.openings) {
+    const w = P.walls.find((x) => x.id === op.wallId);
+    if (!w) continue;
+    const { x, y, f } = openingCenter(op, w);
+    const off = (w.thickness || 12) / 2 + 15;
+    const hits = [...new Set([1, -1].map((k) => rooms.find((r) => pointInPolygon(x + f.nx * off * k, y + f.ny * off * k, r.points))).filter(Boolean))];
+    sides.set(op.id, hits);
+    if (OPENING_MAP[op.kind]?.cat === 'door') for (const r of hits) doors.set(r, (doors.get(r) || 0) + 1);
+  }
+  const out = new Map();
+  for (const [id, hits] of sides) {
+    if (!hits.length) continue;
+    hits.sort((a, b) => (doors.get(a) || 0) - (doors.get(b) || 0) || Math.abs(polygonArea(a.points)) - Math.abs(polygonArea(b.points)));
+    out.set(id, hits[0].name);
+  }
+  return out;
 }
 
 // CSV（加上 BOM，Windows 的 Excel 開啟不會亂碼）
-export function budgetCSV(P = store.project) {
+export function budgetCSV(P = store.project, mode = 'group') {
   const r = computeBudget(P);
   const q = (v) => `"${String(v).replace(/"/g, '""')}"`;
-  const rows = [['類別', '項目', '數量', '單位', '損耗', '單價（元）', '小計（元）', '說明']];
-  for (const g of r.groups) {
-    for (const l of g.lines.filter((x) => x.on)) rows.push([g.name, l.name, l.qty, l.unit, l.waste ? `${Math.round(l.waste * 100)}%` : '', l.price, l.amount, l.details.join('、')]);
+  const rows = [[mode === 'room' ? '房間' : '類別', '項目', '數量', '單位', '損耗', '單價（元）', '小計（元）', mode === 'room' ? '類別' : '說明']];
+  for (const g of mode === 'room' ? r.rooms : r.groups) {
+    for (const l of g.lines.filter((x) => x.on)) rows.push([g.name, l.name, l.qty, l.unit, l.waste ? `${Math.round(l.waste * 100)}%` : '', l.price, l.amount, mode === 'room' ? l.group : l.details.join('、')]);
     rows.push([g.name, '小計', '', '', '', '', g.subtotal, '']);
   }
   rows.push(['', '總計', '', '', '', '', r.total, `室內約 ${r.area.toFixed(1)} 坪，每坪約 ${r.perPing} 元`]);
