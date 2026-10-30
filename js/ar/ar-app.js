@@ -7,6 +7,7 @@ import { OrbitControls } from '../../vendor/three/addons/OrbitControls.js';
 import { RoomEnvironment } from '../../vendor/three/addons/RoomEnvironment.js';
 import { CATALOG_MAP, buildItemObject } from '../data/catalog.js';
 import { paletteFor } from '../data/styles.js';
+import { pointInPolygon } from '../core/geometry.js';
 import { makeLook } from '../editor/render-look.js';
 import { readArLink } from './ar-link.js';
 
@@ -15,7 +16,7 @@ const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const itemName = (it) => it.name || CATALOG_MAP[it.kind]?.name || '家具';
 
-const state = { data: null, pick: 0, model: null, usdz: new Map(), outline: true };
+const state = { data: null, pick: 0, model: null, usdz: new Map(), outline: true, wallIdx: 0, walls: null };
 
 // ---------------------------------------------------------------- 模型
 // 房間地板範圍：半透明地板、邊線與牆角的矮柱，方便在 AR 中對齊自己家的牆角（都用網格，USDZ 也能匯出）
@@ -46,6 +47,75 @@ function roomOutline(polys) {
   return g;
 }
 
+// ---------------------------------------------------------------- 兩個牆角對齊
+// 可用來對齊的牆：房間輪廓的每一邊（50 cm 以上），依長度由長到短。
+// A、B 為站在房間內面對這面牆時左邊、右邊的牆角（平面座標，公分）
+function alignWalls() {
+  if (state.walls) return state.walls;
+  const out = [];
+  for (const pts of state.data.r) {
+    if (pts.length < 3) continue;
+    pts.forEach((p, i) => {
+      const q = pts[(i + 1) % pts.length];
+      const len = Math.hypot(q[0] - p[0], q[1] - p[1]);
+      if (len < 50) return;
+      let nx = -(q[1] - p[1]) / len, ny = (q[0] - p[0]) / len; // 法線，調整為朝向房間內
+      if (!pointInPolygon((p[0] + q[0]) / 2 + nx * 10, (p[1] + q[1]) / 2 + ny * 10, pts)) { nx = -nx; ny = -ny; }
+      const rx = ny, ry = -nx; // 面向牆時的右方
+      const [A, B] = p[0] * rx + p[1] * ry < q[0] * rx + q[1] * ry ? [p, q] : [q, p];
+      out.push({ A, B, len });
+    });
+  }
+  out.sort((a, b) => b.len - a.len);
+  return (state.walls = out);
+}
+
+const MARK = new THREE.MeshStandardMaterial({ color: 0xdc2626, roughness: 0.6 });
+function labelSprite(text) {
+  const c = document.createElement('canvas');
+  c.width = c.height = 96;
+  const x = c.getContext('2d');
+  x.fillStyle = '#dc2626'; x.beginPath(); x.arc(48, 48, 44, 0, Math.PI * 2); x.fill();
+  x.fillStyle = '#fff'; x.font = '700 60px sans-serif'; x.textAlign = 'center'; x.textBaseline = 'middle'; x.fillText(text, 48, 52);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: t, depthTest: false }));
+  sp.scale.setScalar(0.26);
+  sp.renderOrder = 10;
+  return sp;
+}
+// 牆角標記：紅色細柱與 A / B 字樣（pos 為 3D 座標，公尺）
+function cornerPin(text, pos) {
+  const g = new THREE.Group();
+  const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.5, 8), MARK);
+  rod.position.y = 0.25;
+  const sp = labelSprite(text);
+  sp.position.y = 0.62;
+  g.add(rod, sp);
+  g.position.copy(pos);
+  return g;
+}
+// 要對齊的牆：紅色邊線與兩端的 A、B 標記（加在家具群組內，與房間輪廓同一座標）
+function wallMarker() {
+  const w = alignWalls()[state.wallIdx];
+  const g = new THREE.Group();
+  g.userData.wallMarker = true;
+  if (!w) return g;
+  const [ax, ay] = w.A, [bx, by] = w.B;
+  const strip = new THREE.Mesh(new THREE.BoxGeometry(w.len * S, 0.02, 0.05), MARK);
+  strip.position.set(((ax + bx) / 2) * S, 0.012, ((ay + by) / 2) * S);
+  strip.rotation.y = -Math.atan2(by - ay, bx - ax);
+  g.add(strip, cornerPin('A', new THREE.Vector3(ax * S, 0, ay * S)), cornerPin('B', new THREE.Vector3(bx * S, 0, by * S)));
+  return g;
+}
+function refreshMarker(model) {
+  const g = model?.children[0];
+  if (!g) return;
+  const old = g.children.find((o) => o.userData.wallMarker);
+  if (old) { g.remove(old); disposeTree(old); }
+  if (showOutline()) g.add(wallMarker());
+}
+
 // raw：保留原始材質（匯出 USDZ 用）；否則套用寫實材質（預覽與 WebXR）；outline：房間地板範圍
 function buildModel(items, { raw = false, outline = showOutline() } = {}) {
   const pal = paletteFor(state.data.s);
@@ -66,13 +136,14 @@ function buildModel(items, { raw = false, outline = showOutline() } = {}) {
     if (look) o.material = Array.isArray(o.material) ? o.material.map(look) : look(o.material);
   });
   if (outline) g.add(roomOutline(state.data.r));
-  // 底部中心放在原點：AR 擺放時對齊地板
+  // 底部中心放在原點：AR 擺放時對齊地板（對齊用的牆標記在量完範圍後才加入，不影響中心）
   const box = new THREE.Box3().setFromObject(g);
   const c = box.getCenter(new THREE.Vector3());
   const wrap = new THREE.Group();
   g.position.set(-c.x, -box.min.y, -c.z);
   wrap.add(g);
   wrap.userData.size = box.getSize(new THREE.Vector3());
+  if (outline && !raw) g.add(wallMarker());
   return wrap;
 }
 
@@ -119,7 +190,22 @@ function fitPreview() {
   camera.position.set(R * 1.3, size.y * 0.9 + R * 0.7, R * 1.9);
   camera.near = R / 50; camera.far = R * 50;
   camera.updateProjectionMatrix();
+  faceWall();
   controls.update();
+}
+
+// 整個房間時，預覽視角從房間內面向對齊用的牆（A 在左、B 在右，和實際站的方向相同）
+function faceWall() {
+  const w = showOutline() && alignWalls()[state.wallIdx];
+  if (!w) return;
+  const g = state.model.children[0], size = state.model.userData.size;
+  const a = new THREE.Vector3(w.A[0] * S + g.position.x, 0, w.A[1] * S + g.position.z);
+  const b = new THREE.Vector3(w.B[0] * S + g.position.x, 0, w.B[1] * S + g.position.z);
+  const r = b.clone().sub(a).normalize(), n = new THREE.Vector3(-r.z, 0, r.x); // 由牆指向房間內
+  const mid = a.clone().add(b).multiplyScalar(0.5), R = Math.max(size.x, size.z);
+  controls.target.copy(mid).addScaledVector(n, R * 0.45).setY(size.y * 0.3);
+  const far = camera.aspect < 1 ? 2.4 : 1.7; // 直式手機畫面較窄，鏡頭拉遠一些
+  camera.position.copy(mid).addScaledVector(n, R * far).setY(size.y * 0.9 + R * 0.6);
 }
 
 function resize() {
@@ -146,6 +232,27 @@ function setPick(i) {
   $('#arSize').textContent = `寬 ${Math.round(s.x * 100)} × 深 ${Math.round(s.z * 100)} × 高 ${Math.round(s.y * 100)} cm`;
   for (const b of document.querySelectorAll('.ar-item')) b.classList.toggle('on', Number(b.dataset.i) === i);
   $('#arOutlineRow').hidden = !(i < 0 && state.data.r.length);
+  syncWallRow();
+}
+
+function syncWallRow() {
+  const ws = state.data.r.length ? alignWalls() : [];
+  const row = $('#arWallRow');
+  row.hidden = !showOutline() || !ws.length;
+  if (row.hidden) return;
+  const w = ws[state.wallIdx];
+  $('#arWallInfo').textContent = `對齊用的牆：紅色標示（長 ${(w.len / 100).toFixed(2)} m，左 A、右 B）`;
+  $('#arWallNext').hidden = ws.length < 2;
+}
+
+function nextWall() {
+  const ws = alignWalls();
+  if (ws.length < 2) return;
+  state.wallIdx = (state.wallIdx + 1) % ws.length;
+  refreshMarker(state.model);
+  syncWallRow();
+  faceWall();
+  controls.update();
 }
 
 function disposeTree(root) {
@@ -165,7 +272,7 @@ function renderList() {
 }
 
 // ---------------------------------------------------------------- WebXR（Android）
-const xr = { session: null, hitSource: null, ref: null, reticle: null, placed: false, follow: true, model: null, shadow: null };
+const xr = { session: null, hitSource: null, ref: null, reticle: null, placed: false, follow: true, model: null, shadow: null, align: false, points: [], pins: [] };
 
 function makeReticle() {
   const g = new THREE.Group();
@@ -219,10 +326,15 @@ async function startWebXR() {
   xr.reticle = makeReticle();
   xr.scene.add(xr.model, xr.reticle);
   xr.placed = false; xr.follow = true;
-  // 整個房間時旋轉間隔較小，方便對齊牆面
-  xr.step = showOutline() ? 5 : 15;
+  // 整個房間：點兩個牆角自動對齊，旋轉只用來微調（1°）
+  xr.align = showOutline() && alignWalls().length > 0;
+  xr.step = xr.align ? 1 : 15;
   for (const b of document.querySelectorAll('[data-xr="left"], [data-xr="right"]')) b.textContent = `${b.dataset.xr === 'left' ? '↺' : '↻'} ${xr.step}°`;
-  setTip(showOutline() ? '站在房間中央附近，對著地板慢慢移動手機，出現圓圈後點一下擺放' : '慢慢移動手機掃描地板，出現圓圈後點一下畫面擺放');
+  for (const b of document.querySelectorAll('[data-xr="wall"], [data-xr="realign"]')) b.hidden = !xr.align;
+  document.querySelector('[data-xr="wall"]').hidden = !xr.align || alignWalls().length < 2;
+  document.querySelector('[data-xr="move"]').hidden = xr.align;
+  if (xr.align) restartAlign();
+  else setTip('慢慢移動手機掃描地板，出現圓圈後點一下畫面擺放');
   syncMoveBtn();
 
   session.addEventListener('select', onSelect);
@@ -248,8 +360,61 @@ function xrLoop(t, frame) {
   renderer.render(xr.scene, camera);
 }
 
-// 點畫面：第一次在圓圈位置擺放並轉向使用者；移動模式下再點一次固定
+// ---- 兩個牆角對齊（WebXR）
+function restartAlign() {
+  for (const p of xr.pins) { xr.scene.remove(p); disposeTree(p); }
+  xr.pins = []; xr.points = [];
+  xr.placed = false; xr.follow = true;
+  xr.model.visible = false;
+  const w = alignWalls()[state.wallIdx];
+  setTip(`第 1 步：面對設計中紅色標示的牆（長 ${(w.len / 100).toFixed(2)} m），把圓圈移到左邊牆角 A 的地板上，點一下`);
+}
+
+function alignCorner(pos) {
+  xr.points.push(pos.clone());
+  const pin = cornerPin(xr.points.length === 1 ? 'A' : 'B', pos);
+  xr.scene.add(pin);
+  xr.pins.push(pin);
+  if (xr.points.length === 1) { setTip('第 2 步：沿著同一面牆，把圓圈移到右邊牆角 B 的地板上，點一下'); return; }
+  const [RA, RB] = xr.points;
+  const real = Math.hypot(RB.x - RA.x, RB.z - RA.z);
+  if (real < 0.3) { restartAlign(); setTip('兩個點太近了，請重新點：先點左邊牆角 A，再點右邊牆角 B'); return; }
+  // 設計中 A、B 在家具群組內的位置（公尺）
+  const w = alignWalls()[state.wallIdx], g = xr.model.children[0];
+  const a = new THREE.Vector3(w.A[0] * S + g.position.x, 0, w.A[1] * S + g.position.z);
+  const b = new THREE.Vector3(w.B[0] * S + g.position.x, 0, w.B[1] * S + g.position.z);
+  // 讓設計的 A→B 方向轉到實際的 A→B 方向，兩邊的中點重合（長度誤差平均分到兩端）
+  const th = Math.atan2(b.z - a.z, b.x - a.x) - Math.atan2(RB.z - RA.z, RB.x - RA.x);
+  xr.model.rotation.y = th;
+  const midD = a.add(b).multiplyScalar(0.5).applyAxisAngle(UP, th);
+  xr.pivot = RA.clone().add(RB).multiplyScalar(0.5);
+  xr.model.position.set(xr.pivot.x - midD.x, (RA.y + RB.y) / 2, xr.pivot.z - midD.z);
+  xr.placed = true; xr.follow = false; xr.model.visible = true;
+  const diff = Math.round((real - w.len * S) * 100);
+  setTip(`已對齊。設計牆長 ${(w.len / 100).toFixed(2)} m，實際 ${real.toFixed(2)} m（${diff === 0 ? '相同' : `${diff > 0 ? '長' : '短'} ${Math.abs(diff)} cm`}）`
+    + (Math.abs(diff) > 15 ? '。相差較大，請確認兩點是同一面牆的兩端，可按「重新對齊」' : ''));
+}
+
+const UP = new THREE.Vector3(0, 1, 0);
+// 旋轉：對齊後以兩個牆角的中點為軸微調，否則以家具中心旋轉
+function rotateModel(deg) {
+  const d = THREE.MathUtils.degToRad(deg);
+  if (xr.align && xr.placed && xr.pivot) {
+    const off = xr.model.position.clone().sub(xr.pivot).applyAxisAngle(UP, d);
+    xr.model.position.copy(xr.pivot).add(off);
+  }
+  xr.model.rotation.y += d;
+}
+
+// 點畫面：第一次在圓圈位置擺放並轉向使用者；移動模式下再點一次固定（整個房間時改為依序點兩個牆角）
 function onSelect() {
+  if (xr.align) {
+    if (xr.placed) { setTip('已對齊。要重新點牆角請按「重新對齊」，要換一面牆請按「換一面牆」'); return; }
+    if (!xr.reticle.visible) { setTip('還沒偵測到地板，請對著牆角的地板慢慢移動手機'); return; }
+    xr.reticle.matrix.decompose(tmpPos, tmpQuat, tmpScale);
+    alignCorner(tmpPos);
+    return;
+  }
   if (!xr.reticle.visible) { if (!xr.placed) setTip('還沒偵測到地板，請對著地板慢慢移動手機'); return; }
   xr.reticle.matrix.decompose(tmpPos, tmpQuat, tmpScale);
   xr.model.position.copy(tmpPos);
@@ -285,7 +450,9 @@ $('#arOverlay').addEventListener('click', (e) => {
   const a = e.target.closest('[data-xr]')?.dataset.xr;
   if (!a || !xr.session) return;
   if (a === 'end') xr.session.end();
-  else if (a === 'left' || a === 'right') xr.model.rotation.y += THREE.MathUtils.degToRad(a === 'left' ? xr.step : -xr.step);
+  else if (a === 'left' || a === 'right') rotateModel(a === 'left' ? xr.step : -xr.step);
+  else if (a === 'realign' && xr.align) restartAlign();
+  else if (a === 'wall' && xr.align) { nextWall(); refreshMarker(xr.model); restartAlign(); }
   else if (a === 'move' && xr.placed) {
     xr.follow = !xr.follow;
     setTip(xr.follow ? '對準新位置後點一下畫面固定' : '已擺放。按「移動」可換位置，↺ ↻ 旋轉方向');
@@ -381,6 +548,7 @@ async function main() {
   $('#arProject').textContent = state.data.n ? `來自設計「${state.data.n}」` : '';
   renderList();
   $('#arOutline').addEventListener('change', (e) => { state.outline = e.target.checked; setPick(state.pick); });
+  $('#arWallNext').addEventListener('click', nextWall);
   resize();
   setPick(state.data.i.length > 1 || state.data.r.length ? -1 : 0);
   renderer.setAnimationLoop(previewLoop);
@@ -390,9 +558,9 @@ async function main() {
   btn.textContent = startLabel();
   btn.disabled = mode === 'none';
   $('#arHint').innerHTML = mode === 'webxr'
-    ? '按下後允許使用相機，對著地板慢慢移動手機，出現白色圓圈後點一下畫面即可擺放；之後可以移動位置或旋轉方向。整個房間擺放時，建議站在房間中央，擺好後用旋轉讓藍色範圍對齊牆面。'
+    ? '按下後允許使用相機，對著地板慢慢移動手機，出現白色圓圈後點一下畫面即可擺放；之後可以移動位置或旋轉方向。整個房間擺放時，面對上方紅色標示的牆，依序點左邊牆角 A、右邊牆角 B 的地板，就會自動對齊。'
     : mode === 'quicklook'
-      ? '會以「AR 快速查看」開啟：對著地板移動手機，家具出現後用一指拖曳移動、兩指旋轉。家具以實際尺寸顯示；整個房間擺放時，可用藍色範圍對齊牆角。'
+      ? '會以「AR 快速查看」開啟：對著地板移動手機，家具出現後用一指拖曳移動、兩指旋轉。家具以實際尺寸顯示；整個房間擺放時，可用藍色範圍對齊牆角（iPhone 的 AR 快速查看無法點牆角自動對齊，需手動移動）。'
       : '需要支援 AR 的手機：Android 請用 Chrome（需支援 Google Play 的 AR 服務），iPhone、iPad 請用 Safari 開啟這個網址。上方仍可旋轉預覽家具。';
   btn.addEventListener('click', () => (mode === 'webxr' ? startWebXR() : mode === 'quicklook' ? startQuickLook() : null));
 }
