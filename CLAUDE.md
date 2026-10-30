@@ -36,7 +36,7 @@ Interior Studio：純前端靜態網頁的室內設計工具（2D 平面圖、�
 | `js/editor/fengshui.js`、`js/ui/fengshui-panel.js` | 風水檢查（門窗、床位、沙發、書桌等 14 項規則、化解建議）與面板、平面圖標示 |
 | `js/editor/clearance.js`、`js/ui/clearance-panel.js`、`check-panel.js` | 動線與尺寸健檢（格子距離轉換找最窄通道、櫃前與床邊淨空、門片開啟範圍）與共用的檢查面板 |
 | `js/core/variants.js` | 設計方案（同一專案保存多個方案、切換、暫時套用以算圖對照）；對照視窗在 `main.js` |
-| `js/editor/budget.js` | 預算與材料清單（地坪、牆面、天花板面積、門窗與家具數量、預設單價與價位等級、CSV 匯出） |
+| `js/editor/budget.js` | 預算與材料清單（地坪、牆面、天花板面積、門窗與家具數量、預設單價與價位等級、項目做與不做、自訂工程、CSV 匯出） |
 | `js/editor/tour.js`、`mp4-mux.js` | 導覽影片（依門的連通順序走訪房間、運鏡、字幕）與 MP4 逐格封裝 |
 | `js/core/share.js`、`qrcode.js` | 分享連結（網址內壓縮資料、GitHub Gist 短網址、唯讀檢視）與 QR code 產生器 |
 | `js/data/catalog.js` | 家具與門窗（2D 符號、3D 程序化模型、可調參數） |

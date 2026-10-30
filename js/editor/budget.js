@@ -1,6 +1,7 @@
 // 預算與材料清單：從平面圖計算地坪、牆面、天花板面積，門窗與家具數量，依單價估算費用。
 // 單價為台灣市場的大略行情（新台幣，材料與施工合計），僅供參考，使用者可以逐項修改。
-// 設定存在 project.settings.budget = { tier, prices: { 項目鍵: 單價 }, extras: { 編號: true/false }, ceiling }。
+// 設定存在 project.settings.budget = { tier, prices: { 項目鍵: 單價 }, extras: { 編號: true/false }, ceiling,
+//   off: { 項目鍵: true }（不做的項目）, custom: [{ id, group, name, unit, qty, price }]（自訂工程） }。
 import { store } from '../core/state.js';
 import { wallFrame, pointInPolygon, polygonArea, PING } from '../core/geometry.js';
 import { openingCenter } from '../core/model.js';
@@ -104,6 +105,13 @@ function wallAreas(P) {
   return out;
 }
 
+// 項目是否要做：天花板與其他工程沿用原本的勾選設定，其餘項目記在 off
+export function lineOn(B, key) {
+  if (key === 'ceiling') return B.ceiling !== false;
+  if (key.startsWith('extra:')) { const id = key.slice(6); return B.extras?.[id] ?? EXTRAS.find((e) => e.id === id)?.on ?? true; }
+  return !B.off?.[key];
+}
+
 const ping = (cm2) => cm2 / 10000 / PING;
 
 // 依目前設定計算清單：回傳 { groups: [{ name, lines, subtotal }], total, area(坪), perPing }
@@ -130,7 +138,7 @@ export function computeBudget(P = store.project) {
     const [p, w] = WALL[mat] || [1000, 0];
     add(`wall:${mat}`, '牆面工程', MATERIAL_MAP[mat]?.name || mat, '坪', ping(area), p, { waste: w, detail: room.name });
   }
-  if (B.ceiling !== false) {
+  {
     for (const r of rooms) add('ceiling', '天花板工程', '平釘天花板（矽酸鈣板含批土油漆）', '坪', ping(Math.abs(polygonArea(r.points))), CEILING, { detail: r.name });
   }
   for (const op of P.openings) {
@@ -147,16 +155,19 @@ export function computeBudget(P = store.project) {
     else add(`item:${it.kind}`, g, def.name, ['dining_chair', 'bar_stool', 'office_chair', 'armchair'].includes(it.kind) ? '張' : '件', 1, EACH[it.kind] || 5000);
   }
   for (const e of EXTRAS) {
-    const on = B.extras?.[e.id] ?? e.on;
-    if (on) add(`extra:${e.id}`, '其他工程', e.name, '坪', totalPing, e.per);
+    add(`extra:${e.id}`, '其他工程', e.name, '坪', totalPing, e.per);
+  }
+  for (const c of B.custom || []) {
+    const L = { key: `custom:${c.id}`, group: GROUPS.includes(c.group) ? c.group : '其他工程', name: c.name || '自訂工程', unit: c.unit || '式', qty: Number(c.qty) || 0, waste: 0, details: new Map(), price: Number(c.price) || 0, custom: true };
+    lines.set(L.key, L);
   }
 
   const groups = GROUPS.map((name) => {
     const ls = [...lines.values()].filter((l) => l.group === name).map((l) => {
       const qty = l.unit === '件' || l.unit === '張' || l.unit === '樘' ? l.qty : Math.round(l.qty * (1 + l.waste) * 100) / 100;
-      return { ...l, qtyRaw: l.qty, qty, amount: Math.round(qty * l.price), details: [...l.details].map(([k, v]) => `${k} ${Math.round(v * 100) / 100}`) };
+      return { ...l, on: lineOn(B, l.key), qtyRaw: l.qty, qty, amount: Math.round(qty * l.price), details: [...l.details].map(([k, v]) => `${k} ${Math.round(v * 100) / 100}`) };
     });
-    return { name, lines: ls, subtotal: ls.reduce((s, l) => s + l.amount, 0) };
+    return { name, lines: ls, subtotal: ls.reduce((s, l) => s + (l.on ? l.amount : 0), 0) };
   }).filter((g) => g.lines.length);
   const total = groups.reduce((s, g) => s + g.subtotal, 0);
   return { groups, total, area: totalPing, perPing: totalPing ? Math.round(total / totalPing) : 0, tier: B.tier || 'standard' };
@@ -168,7 +179,7 @@ export function budgetCSV(P = store.project) {
   const q = (v) => `"${String(v).replace(/"/g, '""')}"`;
   const rows = [['類別', '項目', '數量', '單位', '損耗', '單價（元）', '小計（元）', '說明']];
   for (const g of r.groups) {
-    for (const l of g.lines) rows.push([g.name, l.name, l.qty, l.unit, l.waste ? `${Math.round(l.waste * 100)}%` : '', l.price, l.amount, l.details.join('、')]);
+    for (const l of g.lines.filter((x) => x.on)) rows.push([g.name, l.name, l.qty, l.unit, l.waste ? `${Math.round(l.waste * 100)}%` : '', l.price, l.amount, l.details.join('、')]);
     rows.push([g.name, '小計', '', '', '', '', g.subtotal, '']);
   }
   rows.push(['', '總計', '', '', '', '', r.total, `室內約 ${r.area.toFixed(1)} 坪，每坪約 ${r.perPing} 元`]);
