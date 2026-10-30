@@ -5,9 +5,16 @@
 //   次版號：新增功能
 //   修訂號：錯誤修正
 
-export const VERSION = '1.43.0';
+export const VERSION = '1.44.0';
 
 export const CHANGELOG = [
+  {
+    version: '1.44.0',
+    date: '2026-10-30',
+    notes: [
+      '報價單新增業主電子郵件：在「列印報價單」設定中填寫，顯示在報價單左欄聯絡電話下方；格式不正確時欄位以紅框提醒，未填寫時不顯示。',
+    ],
+  },
   {
     version: '1.43.0',
     date: '2026-10-30',

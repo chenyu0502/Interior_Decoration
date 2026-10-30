@@ -27,7 +27,7 @@ import { pickEncoder } from './editor/mp4-mux.js';
 import { longLink, shortLink, readShareFromUrl, getGithubToken, setGithubToken, siteUrl } from './core/share.js';
 import { makeQR, qrToCanvas } from './core/qrcode.js';
 import { computeBudget, budgetCSV, TIERS, GROUPS } from './editor/budget.js';
-import { quoteHTML, quoteOptions, validTaxId } from './editor/quote.js';
+import { quoteHTML, quoteOptions, validTaxId, validEmail } from './editor/quote.js';
 import { ensureVariants, addVariant, switchVariant, renameVariant, deleteVariant, variantData, withVariant } from './core/variants.js';
 import { checkFengshui } from './editor/fengshui.js';
 import { checkClearance } from './editor/clearance.js';
@@ -1666,6 +1666,7 @@ class App {
           ${field('client', '業主', '業主姓名或公司名稱')}
           <label><span>業主統一編號</span><input data-q="clientTaxId" value="${esc(o.clientTaxId)}" inputmode="numeric" maxlength="8" placeholder="業主為公司時填寫"></label>
           ${field('phone', '聯絡電話')}
+          <label><span>業主電子郵件</span><input data-q="clientEmail" type="email" value="${esc(o.clientEmail)}" inputmode="email" autocomplete="off" placeholder="name@example.com"></label>
           ${field('site', '案場地址')}${field('company', '報價單位', '公司或工作室名稱')}
           <label><span>公司統一編號</span><input data-q="taxId" value="${esc(o.taxId)}" inputmode="numeric" maxlength="8" placeholder="8 碼數字"></label>
           ${field('companyAddr', '公司地址')}
@@ -1697,7 +1698,7 @@ class App {
     const q = {};
     for (const i of el.querySelectorAll('[data-q]')) {
       const k = i.dataset.q;
-      q[k] = i.type === 'checkbox' ? i.checked : k === 'validDays' ? Math.min(365, Math.max(1, Number(i.value) || 30)) : i.value.trim().slice(0, k === 'terms' ? 2000 : k === 'taxId' || k === 'clientTaxId' ? 8 : 80);
+      q[k] = i.type === 'checkbox' ? i.checked : k === 'validDays' ? Math.min(365, Math.max(1, Number(i.value) || 30)) : i.value.trim().slice(0, k === 'terms' ? 2000 : k === 'taxId' || k === 'clientTaxId' ? 8 : k === 'clientEmail' ? 120 : 80);
     }
     store.update((p) => { p.settings.budget = { ...(p.settings.budget || {}), quote: q }; }, 'settings');
     // 統一編號格式或檢查碼不符時提醒（仍照填寫內容儲存）
@@ -1707,6 +1708,9 @@ class App {
       tax.classList.toggle('invalid', bad);
       tax.title = bad ? '統一編號應為 8 碼數字，且檢查碼需正確，請再確認' : '';
     }
+    const mail = el.querySelector('[data-q=clientEmail]'), badMail = !!q.clientEmail && !validEmail(q.clientEmail);
+    mail.classList.toggle('invalid', badMail);
+    mail.title = badMail ? '電子郵件格式不正確，請再確認' : '';
   }
 
   openQuote(mode) {
