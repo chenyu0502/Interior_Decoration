@@ -14,6 +14,8 @@ import { autoDesign, analyzeRooms, ROOM_TYPES } from './ai/designer.js';
 import * as claude from './ai/claude.js';
 import { DesignAssistant } from './ai/assistant.js';
 import { SunPanel } from './ui/sun-panel.js';
+import { LightPanel } from './ui/light-panel.js';
+import { lightingState, tweakLighting } from './editor/lighting.js';
 import { VERSION, CHANGELOG, compareVersions } from './version.js';
 import { Updater } from './core/updater.js';
 import { mountPano, panoViewerHTML } from './editor/pano-viewer.js';
@@ -56,6 +58,7 @@ class App {
     this.setupLive();
     this.setupAssistant();
     this.sunPanel = new SunPanel(this);
+    this.lightPanel = new LightPanel(this);
     this.selectedStyle = null;
     this.catFilter = 'all';
     this.buildCatalogUI();
@@ -72,6 +75,7 @@ class App {
       if (!['move', 'resize'].includes(reason)) this.renderProps();
       else this.refreshPropValues();
       if (['load', 'design', 'room', 'history', 'edit'].includes(reason)) this.renderRoomTypes();
+      if (!['move', 'resize'].includes(reason)) this.syncToggles();
       this.updateStatus();
     });
     store.on('history', () => this.updateHistoryButtons());
@@ -886,8 +890,9 @@ class App {
     const s = store.project.settings;
     $('#snapToggle').checked = s.snap;
     $('#gridToggle').checked = s.grid;
-    $('#nightBtn').textContent = s.night ? '☾ 夜間' : '☀ 日間';
-    $('#nightBtn').classList.toggle('on', s.night);
+    const L = lightingState(store.project);
+    $('#nightBtn').textContent = `${L.time === 'day' ? '☀' : '☾'} ${L.def.short}`;
+    $('#nightBtn').classList.toggle('on', !!this.lightPanel?.active);
     $('#ceilBtn').classList.toggle('on', s.showCeiling);
     $('#cutBtn').classList.toggle('on', !!s.cutaway);
     this.updateStatus();
@@ -963,7 +968,7 @@ class App {
         leaveShared: () => { location.href = siteUrl(); },
         live: () => { const l = this.view3d.live; l.setEnabled(!l.enabled); toast(l.enabled ? '實景模式已開啟：停止操作約 1 秒後，畫面會逐漸算成照片' : '實景模式已關閉'); },
         vr: () => this.toggleVR(),
-        night: () => { store.update((p) => { p.settings.night = !p.settings.night; }, 'settings'); this.syncToggles(); },
+        night: () => this.lightPanel.toggle(),
         ceiling: () => { store.update((p) => { p.settings.showCeiling = !p.settings.showCeiling; }, 'settings'); this.syncToggles(); },
         cutaway: () => { store.update((p) => { p.settings.cutaway = !p.settings.cutaway; }, 'settings'); this.syncToggles(); },
       };
@@ -1120,8 +1125,10 @@ class App {
       });
     }
     const P = store.project;
-    $('#rTime').value = P.settings.night ? 'night' : ($('#rTime').value || 'day');
-    $('#rLights').checked = RENDER_TIMES[$('#rTime').value].lights;
+    // 依目前的燈光情境預設時段與是否開燈
+    const LS = lightingState(P);
+    $('#rTime').value = LS.time === 'day' ? ($('#rTime').value === 'night' || $('#rTime').value === 'dusk' ? 'day' : $('#rTime').value || 'day') : LS.time;
+    $('#rLights').checked = LS.time === 'day' ? RENDER_TIMES[$('#rTime').value].lights : LS.anyOn;
     $('#rCeiling').checked = this.view3d.mode === 'walk' || (P.settings.showCeiling && !P.settings.cutaway);
     // 環景拍攝位置：漫遊中可用目前位置，也可選任一房間中央
     const target = this.view3d.controls.target;
@@ -1198,6 +1205,18 @@ class App {
       setTimeout(() => URL.revokeObjectURL(url), 5000);
     };
     img.src = src;
+  }
+
+  // 漫遊時點燈具：開燈 / 關燈（白天情境不開燈）
+  toggleLamp(id) {
+    const P = store.project;
+    const L = lightingState(P);
+    const it = P.items.find((x) => x.id === id);
+    if (L.time === 'day') { toast('白天情境不開燈：按 3D 右上角的燈光按鈕選擇其他情境'); return; }
+    const on = !((L.lamps.get(id) || 0) > 0);
+    store.update((p) => tweakLighting(p, { lamps: { [id]: on ? 1 : 0 } }), 'settings');
+    toast(`${on ? '開燈' : '關燈'}：${it?.name || '燈具'}`);
+    if (this.lightPanel.active) this.lightPanel.render();
   }
 
   // ------------------------------------------------------------ 分享連結與 QR code
@@ -1670,7 +1689,7 @@ class App {
   startRender() {
     const opts = {
       engine: $('#rEngine').value, time: $('#rTime').value, quality: $('#rQuality').value, aspect: $('#rAspect').value,
-      ceiling: $('#rCeiling').checked, lights: $('#rLights').checked,
+      ceiling: $('#rCeiling').checked, lights: $('#rLights').checked, lighting: lightingState(store.project),
       exposure: Number($('#rExposure').value), sunRotate: Number($('#rSun').value),
       toneMapping: $('#rTone').value, autoExposure: $('#rAuto').checked, denoise: $('#rDenoise').checked, detail: $('#rDetail').checked,
     };
@@ -1836,7 +1855,7 @@ class App {
     $('#walkTouch').hidden = !walking || !touch;
     $('#gyroBtn').hidden = typeof DeviceOrientationEvent === 'undefined';
     $('#gyroBtn').classList.remove('on'); $('#gyroBtn').textContent = '◎ 陀螺儀';
-    if (touch) $('#walkHelp').textContent = '拖曳環顧 · 搖桿移動 · 點門窗櫃子開關 · 再按「漫遊」離開';
+    if (touch) $('#walkHelp').textContent = '拖曳環顧 · 搖桿移動 · 點門窗櫃子、燈具開關 · 再按「漫遊」離開';
     if (walking) this.view3d.canvas.focus();
   }
 

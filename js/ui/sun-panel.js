@@ -149,6 +149,7 @@ export class SunPanel {
     this.el.hidden = !on;
     $('#sunBtn')?.classList.toggle('on', on);
     if (on) {
+      if (this.app.lightPanel?.active) this.app.lightPanel.toggle(false);
       if (store.project.settings.night) store.update((p) => { p.settings.night = false; }, 'settings');
       this.loadPrefs();
       this.dock(true);

@@ -3,6 +3,7 @@
 // 沿用寫實渲染（RenderStudio）的場景、材質、天空與自動曝光設定。
 import * as THREE from 'three';
 import { store } from '../core/state.js';
+import { lightingState } from './lighting.js';
 import { RenderStudio, RENDER_TIMES } from './render.js';
 
 const PREF_KEY = 'interior-live-trace';
@@ -193,9 +194,11 @@ export class LiveTrace {
     const P = store.project, v = this.v;
     const night = !!P.settings.night;
     const inside = v.mode === 'walk';
+    const L = lightingState(P);
     return {
-      time: night ? 'night' : 'day',
-      lights: night,
+      time: L.time,
+      lights: L.anyOn,
+      lighting: L,
       ceiling: inside,
       engine: 'pathtracing',
       detail: true,

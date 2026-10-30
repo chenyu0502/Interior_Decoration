@@ -32,6 +32,7 @@ Interior Studio：純前端靜態網頁的室內設計工具（2D 平面圖、�
 | `js/editor/pano-viewer.js` | 360° 環景檢視器與檢視網頁匯出 |
 | `js/editor/vr.js` | VR 頭盔模式（WebXR、控制器移動與瞬間移動） |
 | `js/editor/sun.js`、`js/ui/sun-panel.js` | 日照模擬（太陽位置、窗戶照入範圍、日照與西曬統計）與面板 |
+| `js/editor/lighting.js`、`js/ui/light-panel.js` | 燈光情境（天色、色溫、每盞燈的開關與亮度，3D、實景、渲染共用）與面板 |
 | `js/editor/tour.js`、`mp4-mux.js` | 導覽影片（依門的連通順序走訪房間、運鏡、字幕）與 MP4 逐格封裝 |
 | `js/core/share.js`、`qrcode.js` | 分享連結（網址內壓縮資料、GitHub Gist 短網址、唯讀檢視）與 QR code 產生器 |
 | `js/data/catalog.js` | 家具與門窗（2D 符號、3D 程序化模型、可調參數） |

@@ -68,10 +68,10 @@ function physical(src) {
 
 // 寫實材質 → 原始材質（3D 檢視已換成寫實材質時，寫實渲染從原始材質重新轉換）
 const ORIGIN = new WeakMap();
-const originOf = (m) => (m && ORIGIN.get(m)) || m;
+export const originOf = (m) => (m && ORIGIN.get(m)) || m;
 
 // 建立材質轉換器：同一個來源材質只轉換一次（轉換器保留結果，可重複使用）
-export function makeLook({ lights = false, normalMaps = true, raster = false } = {}, made = []) {
+export function makeLook({ lights = false, normalMaps = true, raster = false, lighting = null } = {}, made = []) {
   const map = new WeakMap(); // 來源材質不再使用時自動釋放
   return (m) => {
     m = originOf(m);
@@ -115,6 +115,12 @@ export function makeLook({ lights = false, normalMaps = true, raster = false } =
           r = m.clone();
           // 開燈時燈罩、燈管真的發光；關燈時只保留些微亮度
           r.emissiveIntensity = (m.emissiveIntensity || 1) * (lights ? 1.2 : 0.12);
+          // 燈光情境：每盞燈依自己的亮度與色溫發光
+          if (lighting && m.userData.lampId) {
+            const f = lighting.time === 'day' ? 0 : lighting.lamps.get(m.userData.lampId) || 0;
+            r.emissiveIntensity = (m.userData.baseEI || m.emissiveIntensity || 1) * (f > 0 ? 1.2 * (0.25 + 0.75 * f) : 0.12);
+            if (f > 0) r.emissive = new THREE.Color(lighting.color);
+          }
           break;
         default: break;
       }

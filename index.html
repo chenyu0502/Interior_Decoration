@@ -123,7 +123,7 @@
           <button class="icon-btn" data-action="resetView" title="重設視角">⟲</button>
           <button class="icon-btn" data-action="topView" title="俯視">⊙</button>
           <button class="btn small" data-action="walk" id="walkBtn" title="第一人稱漫遊">◉ 漫遊</button>
-          <button class="btn small" data-action="night" id="nightBtn" title="切換日夜光線">☀ 日間</button>
+          <button class="btn small" data-action="night" id="nightBtn" title="燈光情境：白天、傍晚、夜晚、用餐、電影、閱讀、睡前，可調色溫與亮度">☀ 白天</button>
           <button class="btn small" data-action="cutaway" id="cutBtn" title="把牆降到 120 cm，方便俯瞰配置">矮牆</button>
           <button class="btn small" data-action="ceiling" id="ceilBtn" title="顯示天花板">天花板</button>
           <button class="btn small" data-action="vr" id="vrBtn" hidden title="戴上 VR 頭盔，以實際尺寸走進室內">◈ VR</button>
@@ -133,13 +133,14 @@
           <button class="btn small primary" data-action="render" title="以光線追蹤產生寫實效果圖">✦ 渲染</button>
         </div>
         <div class="live-badge" id="liveBadge" hidden></div>
-        <div class="walk-help" id="walkHelp" hidden>W A S D 移動 · 拖曳滑鼠環顧 · Q / E 轉向 · Shift 加速 · 點門窗櫃子開關 · Esc 離開</div>
+        <div class="walk-help" id="walkHelp" hidden>W A S D 移動 · 拖曳滑鼠環顧 · Q / E 轉向 · Shift 加速 · 點門窗櫃子、燈具開關 · Esc 離開</div>
         <div class="walk-touch" id="walkTouch" hidden>
           <div class="joy" id="walkJoy" title="拖曳移動"><i></i></div>
           <button class="btn small" id="gyroBtn" type="button">◎ 陀螺儀</button>
         </div>
       </div>
       <section class="sun-panel" id="sunPanel" hidden aria-label="日照模擬"></section>
+      <section class="sun-panel light-panel" id="lightPanel" hidden aria-label="燈光情境"></section>
       <div class="share-banner" id="shareBanner" hidden>
         <span>正在檢視分享的設計<b id="shareName"></b>，修改不會存檔，也不會影響您原本的專案。</span>
         <button class="btn small" data-action="keepShared">存成我的專案</button>
