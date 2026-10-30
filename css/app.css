@@ -331,9 +331,10 @@ input, select, textarea { font: inherit; color: inherit; }
 .render-meta { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; flex-wrap: wrap; }
 .render-meta #renderEta { color: var(--text); font-weight: 600; }
 /* 方案 */
-.variant-bar { position: absolute; left: 8px; top: 34px; z-index: 4; display: flex; gap: 4px; flex-wrap: wrap; max-width: 60%; }
-.variant-bar[hidden] { display: none; }
-.variant-bar button { border: 1px solid #d6d9de; background: rgba(255,255,255,.92); color: #1f2937; border-radius: 999px; padding: 2px 10px; font-size: 12px; cursor: pointer; }
+/* 方案切換列：放在 3D 畫面左下角垂直排列，避開右上角的工具按鈕 */
+.variant-bar { position: absolute; left: 8px; bottom: 10px; z-index: 4; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; max-width: 40%; max-height: calc(100% - 60px); overflow-y: auto; }
+.variant-bar[hidden], .view-3d:has(.walk-touch:not([hidden])) .variant-bar { display: none; }
+.variant-bar button { border: 1px solid #d6d9de; background: rgba(255,255,255,.92); color: #1f2937; border-radius: 999px; padding: 2px 10px; font-size: 12px; cursor: pointer; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex-shrink: 0; }
 .variant-bar button.on { background: #0f766e; border-color: #0f766e; color: #fff; }
 .modal-card.variant-card { width: min(1180px, 100%); }
 .var-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
