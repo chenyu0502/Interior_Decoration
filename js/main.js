@@ -8,7 +8,7 @@ import { MATERIALS, MATERIAL_MAP, materialSwatchURL, setMaterialSwatch } from '.
 import { ThumbStudio, THUMB_SIZE, looksBroken, thumbKey, thumbCacheGetAll, thumbCachePut } from './ui/thumbs.js';
 import { STYLES, STYLE_MAP, paletteFor } from './data/styles.js';
 import { SAMPLES } from './data/samples.js';
-import { detectRooms, polygonArea, polygonCentroid, pointInPolygon, wallLength, clamp, areaText, toWallLocal, PING, largestInnerRect } from './core/geometry.js';
+import { detectRooms, polygonArea, polygonCentroid, pointInPolygon, wallLength, clamp, areaText, toWallLocal, PING, largestInnerRect, uid } from './core/geometry.js';
 import { nearestWall, roomAt, wallOnRoom, wallSideToward, scaleProject, projectBounds } from './core/model.js';
 import { autoDesign, analyzeRooms, ROOM_TYPES } from './ai/designer.js';
 import * as claude from './ai/claude.js';
@@ -26,7 +26,7 @@ import { TourPlayer, planTour, pickMime, tourSteps, viewTargets, previewStop } f
 import { pickEncoder } from './editor/mp4-mux.js';
 import { longLink, shortLink, readShareFromUrl, getGithubToken, setGithubToken, siteUrl } from './core/share.js';
 import { makeQR, qrToCanvas } from './core/qrcode.js';
-import { computeBudget, budgetCSV, TIERS, EXTRAS } from './editor/budget.js';
+import { computeBudget, budgetCSV, TIERS, GROUPS } from './editor/budget.js';
 import { ensureVariants, addVariant, switchVariant, renameVariant, deleteVariant, variantData, withVariant } from './core/variants.js';
 import { checkFengshui } from './editor/fengshui.js';
 import { checkClearance } from './editor/clearance.js';
@@ -1393,7 +1393,8 @@ class App {
     const cats = [...new Set([...mA.budget.groups, ...mB.budget.groups].map((g) => g.name))];
     const sub = (m, n) => m.budget.groups.find((g) => g.name === n)?.subtotal || 0;
     $('#varTable').innerHTML = `<table>
-      <thead><tr><th></th><th class="n">${esc(A.name)}</th><th class="n">${esc(B.name)}</th></tr></thead>
+      <colgroup><col class="var-col-label"><col><col></colgroup>
+      <thead><tr><th>項目</th><th class="n">${esc(A.name)}</th><th class="n">${esc(B.name)}</th></tr></thead>
       <tbody>
         <tr><th>風格</th><td class="n">${esc(STYLE_NAME(mA.P.design.styleId))}</td><td class="n">${esc(STYLE_NAME(mB.P.design.styleId))}</td></tr>
         ${row('家具件數', mA.P.items.length, mB.P.items.length)}
@@ -1463,15 +1464,30 @@ class App {
         else if (a === 'reset') { if (confirm('恢復所有預設單價？')) this.editBudget((B) => { B.prices = {}; }); }
         const reset = e.target.closest('[data-reset]');
         if (reset) this.editBudget((B) => { delete B.prices[reset.dataset.reset]; });
+        const del = e.target.closest('[data-del-custom]');
+        if (del) this.editBudget((B) => { B.custom = (B.custom || []).filter((c) => c.id !== del.dataset.delCustom); });
+        if (a === 'add') this.addBudgetItem();
       });
       m.addEventListener('change', (e) => {
         const t = e.target;
         if (t.id === 'bTier') this.editBudget((B) => { B.tier = t.value; });
         else if (t.id === 'bCeiling') this.editBudget((B) => { B.ceiling = t.checked; });
-        else if (t.dataset.extra) this.editBudget((B) => { B.extras[t.dataset.extra] = t.checked; });
-        else if (t.dataset.price) {
-          const v = Math.max(0, Math.round(Number(t.value)));
-          if (Number.isFinite(v)) this.editBudget((B) => { B.prices[t.dataset.price] = v; });
+        else if (t.dataset.on) {
+          const k = t.dataset.on;
+          this.editBudget((B) => {
+            if (k === 'ceiling') B.ceiling = t.checked;
+            else if (k.startsWith('extra:')) B.extras[k.slice(6)] = t.checked;
+            else if (t.checked) delete B.off[k]; else B.off[k] = true;
+          });
+        } else if (t.dataset.price || t.dataset.qty) {
+          const k = t.dataset.price || t.dataset.qty, v = Math.max(0, Number(t.value));
+          if (!Number.isFinite(v)) return;
+          const custom = k.startsWith('custom:') && k.slice(7);
+          this.editBudget((B) => {
+            const c = custom && (B.custom || []).find((x) => x.id === custom);
+            if (c) { if (t.dataset.qty) c.qty = Math.round(v * 100) / 100; else c.price = Math.round(v); }
+            else B.prices[k] = Math.round(v);
+          });
         }
       });
     }
@@ -1482,7 +1498,7 @@ class App {
   editBudget(fn) {
     store.update((p) => {
       const B = p.settings.budget || {};
-      B.prices = B.prices || {}; B.extras = B.extras || {};
+      B.prices = B.prices || {}; B.extras = B.extras || {}; B.off = B.off || {};
       fn(B);
       p.settings.budget = B;
     }, 'settings');
@@ -1496,22 +1512,42 @@ class App {
     const num = (q) => (Number.isInteger(q) ? q : q.toFixed(2));
     $('#budgetOpts').innerHTML = `
       <label>價位等級 <select id="bTier">${Object.entries(TIERS).map(([k, t]) => `<option value="${k}" ${r.tier === k ? 'selected' : ''}>${t.name}</option>`).join('')}</select></label>
-      <label class="check"><input type="checkbox" id="bCeiling" ${B.ceiling !== false ? 'checked' : ''}> 天花板工程</label>
-      ${EXTRAS.map((x) => `<label class="check"><input type="checkbox" data-extra="${x.id}" ${(B.extras?.[x.id] ?? x.on) ? 'checked' : ''}> ${esc(x.name)}</label>`).join('')}`;
+      <span class="hint">取消勾選「做」的項目不列入總計；水電、拆除、設計監工等在「其他工程」中勾選，也可以在最下方新增自訂工程。</span>`;
     $('#budgetBody').innerHTML = `
       <table class="budget-table">
-        <thead><tr><th>項目</th><th class="n">數量</th><th>單位</th><th class="n">單價（元）</th><th class="n">小計（元）</th></tr></thead>
+        <thead><tr><th class="b-on">做</th><th>項目</th><th class="n">數量</th><th>單位</th><th class="n">單價（元）</th><th class="n">小計（元）</th></tr></thead>
         ${r.groups.map((g) => `<tbody>
-          <tr class="bg"><th colspan="4">${esc(g.name)}</th><th class="n">${fmt(g.subtotal)}</th></tr>
-          ${g.lines.map((l) => `<tr>
-            <td>${esc(l.name)}${l.details.length ? `<div class="hint">${esc(l.details.join('、'))}</div>` : ''}</td>
-            <td class="n">${num(l.qty)}${l.waste ? `<div class="hint">含損耗 ${Math.round(l.waste * 100)}%</div>` : ''}</td>
-            <td>${l.unit}</td>
+          <tr class="bg"><th colspan="5">${esc(g.name)}</th><th class="n">${fmt(g.subtotal)}</th></tr>
+          ${g.lines.map((l) => `<tr class="${l.on ? '' : 'off'}">
+            <td class="b-on"><input type="checkbox" data-on="${esc(l.key)}" ${l.on ? 'checked' : ''} aria-label="${esc(l.name)}要做" title="取消勾選表示不做，不列入總計"></td>
+            <td>${esc(l.name)}${l.custom ? ` <button type="button" class="icon-btn" data-del-custom="${esc(l.key.slice(7))}" title="刪除這個自訂工程">✕</button>` : ''}${l.details.length ? `<div class="hint">${esc(l.details.join('、'))}</div>` : ''}</td>
+            <td class="n">${l.custom ? `<input type="number" min="0" step="1" data-qty="${esc(l.key)}" value="${l.qty}" aria-label="${esc(l.name)}數量">` : num(l.qty)}${l.waste ? `<div class="hint">含損耗 ${Math.round(l.waste * 100)}%</div>` : ''}</td>
+            <td>${esc(l.unit)}</td>
             <td class="n"><input type="number" min="0" step="100" data-price="${esc(l.key)}" value="${l.price}" aria-label="${esc(l.name)}單價">${Number.isFinite(B.prices?.[l.key]) ? `<button type="button" class="icon-btn" data-reset="${esc(l.key)}" title="恢復預設單價">↺</button>` : ''}</td>
-            <td class="n">${fmt(l.amount)}</td></tr>`).join('')}
+            <td class="n">${l.on ? fmt(l.amount) : '不做'}</td></tr>`).join('')}
         </tbody>`).join('')}
-      </table>`;
+      </table>
+      <div class="budget-add">
+        <b>新增工程</b>
+        <select id="bAddGroup" aria-label="類別">${GROUPS.map((g) => `<option ${g === '其他工程' ? 'selected' : ''}>${g}</option>`).join('')}</select>
+        <input id="bAddName" placeholder="項目名稱，例如：系統衣櫃拉門" aria-label="項目名稱">
+        <input id="bAddQty" type="number" min="0" step="1" value="1" aria-label="數量">
+        <input id="bAddUnit" value="式" aria-label="單位">
+        <input id="bAddPrice" type="number" min="0" step="100" placeholder="單價" aria-label="單價（元）">
+        <button type="button" class="btn small primary" data-budget="add">新增</button>
+      </div>`;
     $('#budgetTotal').innerHTML = `總計 <b>${fmt(r.total)}</b> 元 <span class="hint">室內約 ${r.area.toFixed(1)} 坪 · 每坪約 ${fmt(r.perPing)} 元</span>`;
+  }
+
+  addBudgetItem() {
+    const name = $('#bAddName').value.trim();
+    if (!name) { toast('請輸入項目名稱'); $('#bAddName').focus(); return; }
+    const c = {
+      id: uid('b'), group: $('#bAddGroup').value, name: name.slice(0, 40), unit: $('#bAddUnit').value.trim().slice(0, 6) || '式',
+      qty: Math.max(0, Number($('#bAddQty').value) || 0), price: Math.max(0, Math.round(Number($('#bAddPrice').value) || 0)),
+    };
+    this.editBudget((B) => { B.custom = [...(B.custom || []), c]; });
+    toast(`已新增「${c.name}」`);
   }
 
   printBudget() {
@@ -1526,7 +1562,7 @@ class App {
       <h1>${esc(store.project.name || '室內設計')} 預算與材料清單</h1>
       <p>${TIERS[r.tier].name}價位 · 室內約 ${r.area.toFixed(1)} 坪 · 單價為台灣市場大略行情（含材料與施工），實際以廠商報價為準</p>
       <table><thead><tr><th>項目</th><th class="n">數量</th><th>單位</th><th class="n">單價</th><th class="n">小計</th></tr></thead>
-      ${r.groups.map((g) => `<tbody><tr class="g"><th colspan="4">${esc(g.name)}</th><th class="n">${fmt(g.subtotal)}</th></tr>${g.lines.map((l) => `<tr><td>${esc(l.name)}${l.details.length ? `<br><small>${esc(l.details.join('、'))}</small>` : ''}</td><td class="n">${Number.isInteger(l.qty) ? l.qty : l.qty.toFixed(2)}</td><td>${l.unit}</td><td class="n">${fmt(l.price)}</td><td class="n">${fmt(l.amount)}</td></tr>`).join('')}</tbody>`).join('')}
+      ${r.groups.map((g) => `<tbody><tr class="g"><th colspan="4">${esc(g.name)}</th><th class="n">${fmt(g.subtotal)}</th></tr>${g.lines.filter((l) => l.on).map((l) => `<tr><td>${esc(l.name)}${l.details.length ? `<br><small>${esc(l.details.join('、'))}</small>` : ''}</td><td class="n">${Number.isInteger(l.qty) ? l.qty : l.qty.toFixed(2)}</td><td>${l.unit}</td><td class="n">${fmt(l.price)}</td><td class="n">${fmt(l.amount)}</td></tr>`).join('')}</tbody>`).join('')}
       <tfoot><tr><td colspan="4">總計（每坪約 ${fmt(r.perPing)} 元）</td><td class="n">${fmt(r.total)}</td></tr></tfoot></table></body></html>`);
     w.document.close();
     w.focus();

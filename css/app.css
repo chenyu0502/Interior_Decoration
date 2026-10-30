@@ -357,8 +357,11 @@ input, select, textarea { font: inherit; color: inherit; }
 .var-wipe input[type=range] { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: ew-resize; margin: 0; }
 .var-wipe .var-tag { position: absolute; top: 8px; padding: 2px 10px; border-radius: 999px; background: rgba(15,17,21,.72); color: #fff; font-size: 12px; pointer-events: none; }
 .var-table table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 10px; }
-.var-table th, .var-table td { padding: 5px 8px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
-.var-table td.n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.var-table table { table-layout: fixed; }
+.var-table col.var-col-label { width: 30%; }
+.var-table th, .var-table td { padding: 5px 8px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+.var-table thead th { color: var(--muted); font-weight: 600; }
+.var-table .n { text-align: right; font-variant-numeric: tabular-nums; }
 .var-table .better { color: #15803d; font-weight: 700; }
 .var-table .diff { color: #b45309; }
 .var-diffs { margin: 10px 0 0; padding-left: 20px; font-size: 13px; line-height: 1.7; }
@@ -375,6 +378,16 @@ input, select, textarea { font: inherit; color: inherit; }
 .budget-table input[type=number] { width: 92px; text-align: right; font: inherit; padding: 2px 4px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); color: var(--text); }
 .budget-table .icon-btn { width: 22px; height: 22px; font-size: 12px; margin-left: 2px; }
 .budget-table .hint { font-size: 11px; margin: 0; }
+.budget-table .b-on { width: 28px; text-align: center; }
+.budget-table tr.off td:not(.b-on) { color: var(--muted); text-decoration: line-through; }
+.budget-table tr.off td .hint, .budget-table tr.off input { text-decoration: none; opacity: .6; }
+.budget-table td input[data-qty] { width: 64px; }
+.budget-add { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 12px; padding: 10px; border: 1px dashed var(--line); border-radius: 8px; font-size: 13px; }
+.budget-add input, .budget-add select { font: inherit; padding: 3px 6px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); color: var(--text); }
+.budget-add #bAddName { flex: 1 1 180px; min-width: 0; }
+.budget-add #bAddQty { width: 64px; }
+.budget-add #bAddUnit { width: 52px; }
+.budget-add #bAddPrice { width: 96px; }
 .budget-foot { align-items: center; flex-wrap: wrap; }
 .budget-total { margin-right: auto; font-size: 15px; }
 .budget-total b { font-size: 20px; color: var(--accent); font-variant-numeric: tabular-nums; }
@@ -435,9 +448,10 @@ input, select, textarea { font: inherit; color: inherit; }
   .share-body { grid-template-columns: 1fr; }
   .budget-table { font-size: 12px; }
   .budget-table th, .budget-table td { padding: 4px 3px; }
-  .budget-table td:first-child { min-width: 96px; }
+  .budget-table td:nth-child(2) { min-width: 96px; }
+  .budget-table .b-on { width: 22px; padding: 4px 0; }
   .budget-table input[type=number] { width: 64px; }
-  .budget-table thead th:nth-child(3), .budget-table td:nth-child(3) { padding: 4px 0; }
+  .budget-table thead th:nth-child(4), .budget-table td:nth-child(4) { padding: 4px 0; }
   .budget-note { display: none; }
   .modal-card.tour-card .render-body { grid-template-columns: 1fr; }
   .tr-list { max-height: none; }
