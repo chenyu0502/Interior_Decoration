@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>AR 擺放家具 · Interior Studio</title>
+  <meta name="description" content="用手機 AR 把 Interior Studio 設計中的家具以實際尺寸擺進自己家。" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232563eb'/%3E%3Cpath d='M7 15 16 8l9 7v9H7z' fill='none' stroke='white' stroke-width='2.4' stroke-linejoin='round'/%3E%3Crect x='13.5' y='17' width='5' height='7' fill='white'/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="css/ar.css" />
+  <script type="importmap">
+    { "imports": { "three": "./vendor/three/three.module.min.js" } }
+  </script>
+</head>
+<body>
+  <header class="ar-head">
+    <a class="ar-brand" href="./" title="開啟 Interior Studio">Interior Studio</a>
+    <h1>AR 擺放家具</h1>
+    <p id="arProject"></p>
+  </header>
+
+  <main class="ar-main">
+    <div class="ar-stage" id="arStage">
+      <canvas id="arCanvas" aria-label="家具 3D 預覽（拖曳旋轉、雙指縮放）"></canvas>
+      <div class="ar-size" id="arSize"></div>
+    </div>
+
+    <section class="ar-pick" aria-label="選擇家具">
+      <div class="ar-list" id="arList"></div>
+    </section>
+
+    <section class="ar-go">
+      <button type="button" class="ar-btn primary" id="arStart" disabled>準備中…</button>
+      <p class="ar-hint" id="arHint"></p>
+    </section>
+
+    <p class="ar-error" id="arError" hidden></p>
+  </main>
+
+  <!-- WebXR AR 進行中的操作按鈕（dom-overlay） -->
+  <div class="ar-overlay" id="arOverlay" hidden>
+    <div class="ar-tip" id="arTip">慢慢移動手機掃描地板，出現圓圈後點一下畫面擺放</div>
+    <div class="ar-tools">
+      <button type="button" class="ar-btn" data-xr="left" title="向左旋轉 15°">↺ 15°</button>
+      <button type="button" class="ar-btn" data-xr="move">移動</button>
+      <button type="button" class="ar-btn" data-xr="right" title="向右旋轉 15°">↻ 15°</button>
+      <button type="button" class="ar-btn" data-xr="end">結束</button>
+    </div>
+  </div>
+
+  <script type="module" src="js/ar/ar-app.js"></script>
+</body>
+</html>

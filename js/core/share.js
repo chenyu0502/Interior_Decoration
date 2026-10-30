@@ -37,6 +37,14 @@ async function pipe(bytes, stream) {
   return new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(stream)).arrayBuffer());
 }
 
+// 任意資料 ↔ 網址用字串（deflate 壓縮 + base64url），AR 連結也使用
+export async function packJSON(obj) {
+  return toB64url(await pipe(new TextEncoder().encode(JSON.stringify(obj)), new CompressionStream('deflate-raw')));
+}
+export async function unpackJSON(str) {
+  return JSON.parse(new TextDecoder().decode(await pipe(fromB64url(str), new DecompressionStream('deflate-raw'))));
+}
+
 // 專案 → 網址片段（deflate 壓縮 + base64url）
 export async function encodeProject(project) {
   const json = new TextEncoder().encode(JSON.stringify(sharePayload(project)));
