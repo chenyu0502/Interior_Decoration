@@ -33,3 +33,7 @@ html, body { margin: 0; overflow-x: hidden; background: var(--bg); color: var(--
 .ar-check { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; color: var(--muted); margin-top: 4px; }
 .ar-check[hidden] { display: none; }
 .ar-check input { margin-top: 2px; width: 18px; height: 18px; flex: none; }
+.ar-wall { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 6px; padding: 8px 10px; border-radius: 10px; background: #fef2f2; color: #991b1b; font-size: 13px; }
+.ar-wall[hidden] { display: none; }
+.ar-btn.small { padding: 6px 10px; font-size: 13px; flex: none; }
+.ar-tools .ar-btn[hidden] { display: none; }

@@ -27,6 +27,7 @@
     <section class="ar-pick" aria-label="選擇家具">
       <div class="ar-list" id="arList"></div>
       <label class="ar-check" id="arOutlineRow" hidden><input type="checkbox" id="arOutline" checked> 顯示房間地板範圍（藍色區域與牆角標記，方便對齊自己家的牆角）</label>
+      <div class="ar-wall" id="arWallRow" hidden><span id="arWallInfo"></span><button type="button" class="ar-btn small" id="arWallNext">換一面牆</button></div>
     </section>
 
     <section class="ar-go">
@@ -43,6 +44,8 @@
     <div class="ar-tools">
       <button type="button" class="ar-btn" data-xr="left" title="向左旋轉 15°">↺ 15°</button>
       <button type="button" class="ar-btn" data-xr="move">移動</button>
+      <button type="button" class="ar-btn" data-xr="wall" hidden>換一面牆</button>
+      <button type="button" class="ar-btn" data-xr="realign" hidden>重新對齊</button>
       <button type="button" class="ar-btn" data-xr="right" title="向右旋轉 15°">↻ 15°</button>
       <button type="button" class="ar-btn" data-xr="end">結束</button>
     </div>
