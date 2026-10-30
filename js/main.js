@@ -20,6 +20,8 @@ import { mountPano, panoViewerHTML } from './editor/pano-viewer.js';
 import { vrSupported } from './editor/vr.js';
 import { TourPlayer, planTour, pickMime, tourSteps, viewTargets, previewStop } from './editor/tour.js';
 import { pickEncoder } from './editor/mp4-mux.js';
+import { longLink, shortLink, readShareFromUrl, getGithubToken, setGithubToken, siteUrl } from './core/share.js';
+import { makeQR, qrToCanvas } from './core/qrcode.js';
 import { RenderStudio, RENDER_TIMES, RENDER_QUALITY, RENDER_ASPECTS, RENDER_ENGINES, RENDER_TONES } from './editor/render.js';
 import { analyzeFloorplan, buildProject, estimateScale, loadImageData } from './ai/floorplan-import.js';
 
@@ -81,6 +83,9 @@ class App {
     requestAnimationFrame(() => this.plan.fit());
     this.setTool('select');
     this.initUpdater();
+    this.openSharedFromUrl();
+    // 在已開啟的分頁貼上分享連結時，只有 # 之後改變，頁面不會重新載入
+    window.addEventListener('hashchange', () => { if (location.hash.startsWith('#share=')) this.openSharedFromUrl(); });
   }
 
   // ------------------------------------------------------------ 版本與更新
@@ -953,6 +958,9 @@ class App {
         assistant: () => this.toggleAssistant(),
         sun: () => this.sunPanel.toggle(),
         tour: () => this.openTour(),
+        share: () => this.openShare(),
+        keepShared: () => this.keepShared(),
+        leaveShared: () => { location.href = siteUrl(); },
         live: () => { const l = this.view3d.live; l.setEnabled(!l.enabled); toast(l.enabled ? '實景模式已開啟：停止操作約 1 秒後，畫面會逐漸算成照片' : '實景模式已關閉'); },
         vr: () => this.toggleVR(),
         night: () => { store.update((p) => { p.settings.night = !p.settings.night; }, 'settings'); this.syncToggles(); },
@@ -1190,6 +1198,145 @@ class App {
       setTimeout(() => URL.revokeObjectURL(url), 5000);
     };
     img.src = src;
+  }
+
+  // ------------------------------------------------------------ 分享連結與 QR code
+  // 開啟別人分享的設計：唯讀檢視（不自動存檔），可選擇存成自己的專案
+  async openSharedFromUrl() {
+    if (!/#share=|[?&]g=/.test(location.href)) return;
+    if (/[?&]g=/.test(location.search)) toast('正在讀取分享的設計…');
+    let shared;
+    try { shared = await readShareFromUrl(); } catch (err) { toast(`無法開啟分享的設計：${err.message}`); return; }
+    if (!shared) return;
+    store.readOnly = true;
+    store.load(shared.project);
+    this.afterLoad();
+    this.renderProps(); this.renderRoomTypes();
+    $('#shareName').textContent = `「${shared.project.name || '未命名'}」`;
+    $('#shareBanner').hidden = false;
+    if (this.isMobileLayout()) this.setView('3d');
+  }
+
+  keepShared() {
+    if (!confirm('存成我的專案會取代這個瀏覽器中自動存檔的設計。\n若原本的設計還需要，請先回到我的專案，用「檔案 → 儲存專案檔」備份。\n\n確定要存成我的專案嗎？')) return;
+    store.readOnly = false;
+    store.saveLocal();
+    history.replaceState(null, '', siteUrl());
+    $('#shareBanner').hidden = true;
+    toast('已存成您的專案，之後的修改會自動存檔');
+  }
+
+  async openShare() {
+    const m = $('#shareModal');
+    if (!this.shareBound) {
+      this.shareBound = true;
+      m.addEventListener('click', (e) => {
+        if (e.target === m) { m.hidden = true; return; }
+        const a = e.target.closest('[data-share]')?.dataset.share;
+        if (!a) return;
+        if (a === 'close') m.hidden = true;
+        else if (a === 'copyLong') this.copyText($('#shareLong').value);
+        else if (a === 'copyShort') this.copyText($('#shareShort').value);
+        else if (a === 'sysLong') this.systemShare($('#shareLong').value);
+        else if (a === 'sysShort') this.systemShare($('#shareShort').value);
+        else if (a === 'saveToken') {
+          const t = $('#shareToken').value.trim();
+          if (!/^(ghp_|github_pat_|gho_)[A-Za-z0-9_]{20,}$/.test(t)) { toast('權杖格式不正確，應為 ghp_ 或 github_pat_ 開頭'); return; }
+          setGithubToken(t); $('#shareToken').value = '';
+          this.syncShareToken();
+          toast('已儲存 GitHub 權杖');
+        } else if (a === 'clearToken') { setGithubToken(''); this.syncShareToken(); toast('已移除 GitHub 權杖'); }
+        else if (a === 'makeShort') this.makeShortLink(e.target.closest('button'));
+        else if (a === 'dlQr' && this.shareQr) {
+          const c = this.qrImage(this.shareQr.url);
+          download(c.toDataURL('image/png'), `${store.project.name || '室內設計'}-QR.png`);
+        }
+      });
+    }
+    m.hidden = false;
+    this.syncShareToken();
+    $('#shareShortRow').hidden = true;
+    $('#shareLong').value = '產生中…';
+    const url = await longLink(store.project);
+    $('#shareLong').value = url;
+    const canShare = !!navigator.share;
+    m.querySelector('[data-share="sysLong"]').hidden = !canShare;
+    m.querySelector('[data-share="sysShort"]').hidden = !canShare;
+    // 長網址夠短時直接做成 QR code（版本 20 以內，手機才掃得出來）
+    const qr = makeQR(url, 'L');
+    const fits = qr && qr.version <= 20;
+    $('#shareLongInfo').textContent = `網址長度 ${url.length.toLocaleString()} 字元${fits ? '，可直接做成 QR code。' : '，太長做不成 QR code，請改用下方的短網址。'}`;
+    this.showShareQr(fits ? { url, qr, note: '掃描開啟分享連結' } : null);
+  }
+
+  syncShareToken() {
+    const has = !!getGithubToken();
+    $('#shareSetup').hidden = has;
+    $('#shareReady').hidden = !has;
+  }
+
+  async makeShortLink(btn) {
+    btn.disabled = true;
+    const label = btn.textContent;
+    btn.textContent = '產生中…';
+    try {
+      const { url } = await shortLink(store.project);
+      $('#shareShort').value = url;
+      $('#shareShortRow').hidden = false;
+      this.showShareQr({ url, qr: makeQR(url, 'M'), note: '掃描開啟分享的設計（短網址）' });
+      toast('已產生短網址與 QR code');
+    } catch (err) {
+      toast(`無法產生短網址：${err.message}`);
+      if (/權杖/.test(err.message) && /無效|過期/.test(err.message)) { setGithubToken(''); this.syncShareToken(); }
+    } finally {
+      btn.disabled = false; btn.textContent = label;
+    }
+  }
+
+  showShareQr(s) {
+    this.shareQr = s;
+    const box = $('#shareQr');
+    $('#shareModal').querySelector('[data-share="dlQr"]').disabled = !s;
+    if (!s) {
+      box.textContent = '設計資料較多，請產生短網址後再顯示 QR code';
+      $('#shareQrInfo').textContent = '';
+      return;
+    }
+    box.replaceChildren(qrToCanvas(s.qr, 6));
+    $('#shareQrInfo').textContent = s.note;
+  }
+
+  // 下載用的 QR code 圖片：QR code 加上專案名稱與說明
+  qrImage(url) {
+    const qr = makeQR(url, url.length < 200 ? 'M' : 'L');
+    const q = qrToCanvas(qr, Math.max(4, Math.round(480 / (qr.size + 8))));
+    const c = document.createElement('canvas');
+    c.width = q.width + 40; c.height = q.height + 110;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
+    ctx.drawImage(q, 20, 20);
+    ctx.fillStyle = '#111'; ctx.textAlign = 'center';
+    const font = '"Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif';
+    ctx.font = `700 26px ${font}`;
+    ctx.fillText(store.project.name || '室內設計', c.width / 2, q.height + 58, c.width - 30);
+    ctx.font = `400 16px ${font}`; ctx.fillStyle = '#555';
+    ctx.fillText('手機掃描即可查看 2D、3D 與漫遊', c.width / 2, q.height + 88, c.width - 30);
+    return c;
+  }
+
+  async copyText(text) {
+    try { await navigator.clipboard.writeText(text); toast('已複製連結'); } catch {
+      const t = document.createElement('textarea');
+      t.value = text; document.body.appendChild(t); t.select();
+      try { document.execCommand('copy'); toast('已複製連結'); } catch { toast('無法自動複製，請手動選取網址複製'); }
+      t.remove();
+    }
+  }
+
+  async systemShare(url) {
+    try { await navigator.share({ title: store.project.name || '室內設計', text: '用 Interior Studio 查看這個室內設計', url }); } catch (err) {
+      if (err?.name !== 'AbortError') toast(`無法分享：${err?.message || err}`);
+    }
   }
 
   // 導覽影片：規劃路線、錄製、預覽、下載與分享
@@ -1834,6 +1981,7 @@ class App {
       if (!$('#reportModal').hidden) { if (e.key === 'Escape') $('#reportModal').hidden = true; return; }
       if (!$('#renderModal').hidden) { if (e.key === 'Escape') this.closeRender(); return; }
       if (!$('#tourModal').hidden) { if (e.key === 'Escape') this.closeTour(); return; }
+      if (!$('#shareModal').hidden) { if (e.key === 'Escape') $('#shareModal').hidden = true; return; }
       if (!$('#updateModal').hidden) { if (e.key === 'Escape') $('#updateModal').querySelector('[data-update="later"], [data-update="close"]')?.click(); return; }
       const ctrl = e.ctrlKey || e.metaKey;
       if (this.view3d.mode === 'walk') {

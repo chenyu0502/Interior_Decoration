@@ -38,6 +38,7 @@
         <hr />
         <button data-action="export2d">匯出 2D 平面圖 PNG</button>
         <button data-action="export3d">匯出 3D 透視圖 PNG</button>
+        <button data-action="share">分享連結與 QR code</button>
         <button data-action="render">寫實渲染（光線追蹤）</button>
         <button data-action="tour">產生導覽影片</button>
         <hr />
@@ -139,6 +140,11 @@
         </div>
       </div>
       <section class="sun-panel" id="sunPanel" hidden aria-label="日照模擬"></section>
+      <div class="share-banner" id="shareBanner" hidden>
+        <span>正在檢視分享的設計<b id="shareName"></b>，修改不會存檔，也不會影響您原本的專案。</span>
+        <button class="btn small" data-action="keepShared">存成我的專案</button>
+        <button class="btn small" data-action="leaveShared">回到我的專案</button>
+      </div>
       <section class="ai-chat" id="aiChat" hidden aria-label="一句話改設計">
         <div class="ai-chat-head"><b>✦ 一句話改設計</b><span class="hint" id="aiChatHint">由 Claude 直接修改，可一鍵復原</span><button class="icon-btn" id="aiChatClose" title="關閉">✕</button></div>
         <div class="ai-chat-log" id="aiChatLog"></div>
@@ -268,6 +274,47 @@
         <button class="btn" data-tour="download" disabled>下載影片</button>
         <button class="btn primary" data-tour="start">開始錄製</button>
       </footer>
+    </div>
+  </div>
+
+  <div class="modal" id="shareModal" hidden>
+    <div class="modal-card share-card">
+      <header>
+        <h2>分享設計</h2>
+        <button class="icon-btn" data-share="close" title="關閉">✕</button>
+      </header>
+      <div class="modal-body share-body">
+        <div class="share-main">
+          <section>
+            <h3>分享連結</h3>
+            <p class="hint">設計資料直接放在網址裡，不經過任何伺服器，不需要設定。對方開啟後可以看 2D、3D、漫遊與日照，不會影響對方自己的專案；底圖不會一起分享。分享的是目前這一刻的設計，之後修改要重新分享。</p>
+            <div class="share-row"><input id="shareLong" readonly aria-label="分享連結"><button type="button" class="btn" data-share="copyLong">複製</button><button type="button" class="btn" data-share="sysLong" hidden>分享…</button></div>
+            <p class="hint" id="shareLongInfo"></p>
+          </section>
+          <section>
+            <h3>短網址與 QR code</h3>
+            <div id="shareSetup">
+              <p class="hint">設計資料較多時，網址太長做不成 QR code，需要先把設計存成您 GitHub 帳號下不公開的 Gist，才能產生短網址。只要設定一次：</p>
+              <ol class="share-steps">
+                <li><a href="https://github.com/settings/tokens/new?scopes=gist&amp;description=Interior%20Studio" target="_blank" rel="noopener">開啟 GitHub 建立權杖的頁面</a>（已勾選 gist 權限，其他都不用勾）。</li>
+                <li>設定有效期限後，按頁面最下方「Generate token」。</li>
+                <li>複製產生的權杖，貼到下方並儲存。權杖只存在這個瀏覽器。</li>
+              </ol>
+              <div class="share-row"><input id="shareToken" type="password" placeholder="ghp_ 開頭的權杖" autocomplete="off" aria-label="GitHub 權杖"><button type="button" class="btn" data-share="saveToken">儲存</button></div>
+            </div>
+            <div id="shareReady" hidden>
+              <div class="share-row"><button type="button" class="btn primary" data-share="makeShort">產生短網址與 QR code</button><button type="button" class="btn small" data-share="clearToken" title="從這個瀏覽器移除 GitHub 權杖">清除權杖</button></div>
+              <div class="share-row" id="shareShortRow" hidden><input id="shareShort" readonly aria-label="短網址"><button type="button" class="btn" data-share="copyShort">複製</button><button type="button" class="btn" data-share="sysShort" hidden>分享…</button></div>
+              <p class="hint">Gist 設為不公開，不會出現在搜尋結果，但知道網址的人都能看。不再需要時，可到 GitHub 的 Gist 頁面刪除。</p>
+            </div>
+          </section>
+        </div>
+        <aside class="share-qr" id="shareQrBox">
+          <div id="shareQr" class="share-qr-img"></div>
+          <p class="hint" id="shareQrInfo"></p>
+          <button type="button" class="btn" data-share="dlQr" disabled>下載 QR code 圖片</button>
+        </aside>
+      </div>
     </div>
   </div>
 
