@@ -15,7 +15,8 @@ Interior Studio：純前端靜態網頁的室內設計工具（2D 平面圖、�
 
 - 沒有建置流程，ES Module 直接由瀏覽器載入；`three` 透過 `index.html` 的 importmap 指向 `vendor/three/three.module.min.js`（r169）。
 - 第三方函式庫全部放在 `vendor/`（Three.js 與其 addons（含 USDZExporter、fflate）、Anthropic SDK、three-gpu-pathtracer 打包檔），不使用 CDN。
-- 部署：合併到 `main` 後，`.github/workflows/pages.yml` 自動發布到 GitHub Pages。
+- 部署：合併到 `main` 後，`.github/workflows/pages.yml` 自動發布到 GitHub Pages，並透過 Vercel Deploy Hook（Secret `VERCEL_DEPLOY_HOOK`）通知 Claude Flow 重新部署。
+- Claude Flow（`chenyu0502/Claude_Flow`，https://claude-flow-chi.vercel.app）在 `/interior/` 提供本工具：建置時下載本 repo `main` 的 `index.html`、`ar.html`、`css/`、`js/`、`vendor/`、`LICENSE`，並在 `index.html` 的 `<head>` 插入 Claude Flow 的登入檢查。因此網站必須維持相對路徑、可放在子目錄運作；新增上述以外的執行期檔案或目錄時，要同步更新 Claude Flow 的 `scripts/fetch-interior.mjs`。唯讀分享連結（`#share=`、`?g=`）與 `ar.html` 在 Claude Flow 不要求登入。
 
 主要檔案：
 

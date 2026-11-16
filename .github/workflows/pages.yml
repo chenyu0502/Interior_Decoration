@@ -38,3 +38,17 @@ jobs:
       - name: 部署
         id: deployment
         uses: actions/deploy-pages@v4
+
+      # Claude Flow（https://claude-flow-chi.vercel.app/interior/）建置時會抓本 repo 最新的 main，
+      # 這一步通知它重新部署，室內設計的更新才會同步上去。
+      # Vercel Deploy Hook 網址存在 Secret VERCEL_DEPLOY_HOOK；沒有設定時略過，不影響 GitHub Pages。
+      - name: 通知 Claude Flow 重新部署
+        env:
+          DEPLOY_HOOK: ${{ secrets.VERCEL_DEPLOY_HOOK }}
+        run: |
+          if [ -z "$DEPLOY_HOOK" ]; then
+            echo "未設定 VERCEL_DEPLOY_HOOK，略過"
+            exit 0
+          fi
+          curl -fsS -X POST "$DEPLOY_HOOK" > /dev/null
+          echo "已通知 Claude Flow 重新部署"
