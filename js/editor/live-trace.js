@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { store } from '../core/state.js';
 import { lightingState } from './lighting.js';
 import { RenderStudio, RENDER_TIMES } from './render.js';
+import { GpuPacer } from '../core/gpu-pace.js';
 
 const PREF_KEY = 'interior-live-trace';
 const IDLE_MS = 350; // 停止操作多久後開始計算
@@ -22,7 +23,8 @@ export class LiveTrace {
   constructor(view3d, { mobile = false } = {}) {
     this.v = view3d;
     this.mobile = mobile;
-    this.enabled = prefGet() !== 'off';
+    // 預設關閉：光線追蹤很吃顯示卡，由使用者按「實景」開啟（記住設定）
+    this.enabled = prefGet() === 'on';
     this.failed = false;
     this.safe = 0; // 降級次數：顯示卡中斷或畫面異常時降低解析度與每次計算量後重試
     this.state = 'idle'; // idle：未計算；tracing：計算中；done：已完成
@@ -76,6 +78,7 @@ export class LiveTrace {
   // 每個畫面由 3D 檢視呼叫（即時畫面已渲染之後）
   tick(paused) {
     if (!this.enabled || this.failed) return;
+    if (document.hidden) return; // 背景分頁不計算（離開前景時已釋放資源）
     if (paused) { if (this.state === 'tracing') this.cancel(); return; }
     if (this.state === 'done') return;
     if (this.state === 'idle') {
@@ -105,6 +108,7 @@ export class LiveTrace {
       this.v.container.insertBefore(c, this.v.container.firstChild);
       c.addEventListener('webglcontextlost', (e) => { e.preventDefault(); this.retry('顯示卡記憶體不足或驅動程式中斷（WebGL context lost）'); });
       this.renderer = r;
+      this.pacer = new GpuPacer(r, { max: 6 });
       this.canvas = c;
       const rs = new RenderStudio(this.v);
       rs.renderer = r;
@@ -164,6 +168,8 @@ export class LiveTrace {
   }
 
   teardown() {
+    this.pacer?.dispose();
+    this.pacer = null;
     try { this.pt?.dispose(); } catch { /* 忽略 */ }
     for (const d of [...(this.rs?.disposables || []), ...(this.keep || [])]) d.dispose?.();
     if (this.renderer) { this.renderer.dispose(); this.renderer.forceContextLoss?.(); }
@@ -272,12 +278,11 @@ export class LiveTrace {
   step() {
     const pt = this.pt, rs = this.rs;
     if (!pt || !this.ready) return;
-    const now = performance.now(), dt = now - this.lastFrame;
-    this.lastFrame = now;
-    // 依畫面間隔調整取樣量，避免拖慢操作
-    if (dt < 24 && this.perFrame < 6) this.perFrame++;
-    else if (dt > 50 && this.perFrame > 1) this.perFrame = Math.max(1, this.perFrame >> 1);
-    for (let i = 0; i < this.perFrame && pt.samples < this.maxSamples; i++) pt.renderSample();
+    // 上一批在顯示卡上做完才送下一批（每批約一個畫面的工作量），避免顯示卡指令堆積拖住整個瀏覽器
+    const n = this.pacer.take();
+    if (!n) return;
+    for (let i = 0; i < n && pt.samples < this.maxSamples; i++) pt.renderSample();
+    this.pacer.mark();
     if (!this.checked && pt.samples >= 2) {
       this.checked = true;
       if (!this.exposed) { rs.autoExpose(this.timeKey); this.exposed = true; }
@@ -307,6 +312,12 @@ export class LiveTrace {
       covering: this.covering,
       progress: this.state === 'done' ? 1 : Math.min(1, s / this.maxSamples),
     });
+  }
+
+  // 離開頁面或切到背景：停止計算並釋放顯示卡資源（回到前景後，開啟中的實景模式會在停止操作後重新計算）
+  suspend() {
+    this.cancel();
+    this.teardown();
   }
 
   dispose() { this.teardown(); }

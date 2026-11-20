@@ -2,6 +2,7 @@
 // 先以一般即時渲染快速產生，再以光線追蹤（光線多次反彈、柔和陰影、反射與透光）重新拍攝成接近實景照片的縮圖。
 // 完成的縮圖存在瀏覽器（IndexedDB），之後開啟網頁直接使用。
 import * as THREE from 'three';
+import { GpuPacer } from '../core/gpu-pace.js';
 import { RoomEnvironment } from '../../vendor/three/addons/RoomEnvironment.js';
 import { RoundedBoxGeometry } from '../../vendor/three/addons/RoundedBoxGeometry.js';
 import { buildItemObject, buildOpeningObject } from '../data/catalog.js';
@@ -274,6 +275,7 @@ export class ThumbStudio {
     r.toneMapping = THREE.NeutralToneMapping;
     r.toneMappingExposure = 1.05;
     this.tr = r;
+    this.pacer = new GpuPacer(r, { max: 8 });
     this.lost = false;
     r.domElement.addEventListener('webglcontextlost', (e) => { e.preventDefault(); this.lost = true; });
     const pt = new mod.WebGLPathTracer(r);
@@ -326,17 +328,15 @@ export class ThumbStudio {
       this.tscene.add(root);
       this.tscene.updateMatrixWorld(true);
       pt.setScene(this.tscene, this.cam);
-      let perFrame = 1, last = performance.now();
       while (pt.samples < samples) {
         await new Promise((res) => requestAnimationFrame(res));
         if (shouldStop() || this.lost) return null;
-        if (paused()) { last = performance.now(); continue; }
-        const now = performance.now(), dt = now - last;
-        last = now;
-        // 依畫面間隔調整每個畫面的取樣次數，避免拖慢編輯畫面
-        if (dt < 20 && perFrame < 8) perFrame++;
-        else if (dt > 40 && perFrame > 1) perFrame = Math.max(1, perFrame >> 1);
-        for (let i = 0; i < perFrame && pt.samples < samples; i++) pt.renderSample();
+        if (paused()) continue;
+        // 上一批在顯示卡上做完才送下一批，避免顯示卡指令堆積拖住整個瀏覽器
+        const n = this.pacer.take();
+        if (!n) continue;
+        for (let i = 0; i < n && pt.samples < samples; i++) pt.renderSample();
+        this.pacer.mark();
       }
       return this.tr.domElement;
     } finally {
@@ -353,6 +353,7 @@ export class ThumbStudio {
     for (const m of this.srcMats) { m.map?.dispose(); m.dispose(); }
     this.renderer.dispose();
     this.renderer.forceContextLoss?.();
+    this.pacer?.dispose();
     if (this.pt) {
       try { this.pt.dispose(); } catch { /* 部分資源未建立時忽略 */ }
       this.denoise?.dm.dispose();

@@ -7,6 +7,7 @@ import { projectBounds } from '../core/model.js';
 import { pointInPolygon, polygonCentroid, polygonArea } from '../core/geometry.js';
 import { CATALOG_MAP } from '../data/catalog.js';
 import { realisticMaterials, makeSky } from './render-look.js';
+import { GpuPacer } from '../core/gpu-pace.js';
 
 const S = 0.01; // 公分 → 公尺
 
@@ -264,8 +265,9 @@ export class RenderStudio {
       this.snapshot = null;
 
       const t0 = performance.now();
-      // 每個畫面送出的取樣次數依畫面間隔自動調整，避免顯示卡工作堆積造成瀏覽器卡頓
-      let perFrame = 1, last = performance.now(), checked = false;
+      // 上一批在顯示卡上做完才送下一批（每批約一個畫面的工作量），避免顯示卡指令堆積拖住整個瀏覽器
+      const pacer = new GpuPacer(renderer, { max: 16 });
+      let last = performance.now(), checked = false;
       const checkpoints = [0.25, 0.5, 0.75]; // 渲染途中再檢查，並保留最後一張正常畫面
       const hist = []; // 最近幾秒的 [時間, 取樣數]，用來估算目前速度
       const step = () => {
@@ -275,9 +277,10 @@ export class RenderStudio {
         last = now;
         // 分頁切到背景時瀏覽器會暫停渲染，暫停前的紀錄不列入速度估算
         if (dt > 1000) hist.length = 0;
-        if (dt < 22 && perFrame < 16) perFrame++;
-        else if (dt > 45 && perFrame > 1) perFrame = Math.max(1, Math.floor(perFrame / 2));
-        for (let i = 0; i < perFrame && pt.samples < q.samples; i++) pt.renderSample();
+        const n = pacer.take();
+        if (!n) { requestAnimationFrame(step); return; }
+        for (let i = 0; i < n && pt.samples < q.samples; i++) pt.renderSample();
+        pacer.mark();
         const exact = Math.min(pt.samples, q.samples), samples = Math.floor(exact);
         // 前幾次取樣後：自動曝光，再檢查畫面；全黑或數值異常時改用相容模式
         if (!checked && exact >= Math.min(3, q.samples)) {

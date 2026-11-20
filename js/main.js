@@ -26,6 +26,7 @@ import { TourPlayer, planTour, pickMime, tourSteps, viewTargets, previewStop } f
 import { pickEncoder } from './editor/mp4-mux.js';
 import { longLink, shortLink, readShareFromUrl, getGithubToken, setGithubToken, siteUrl } from './core/share.js';
 import { makeQR, qrToCanvas } from './core/qrcode.js';
+import { onPageHidden } from './core/gpu-pace.js';
 import { arPayload, arLink } from './ar/ar-link.js';
 import { computeBudget, budgetCSV, TIERS, GROUPS } from './editor/budget.js';
 import { quoteHTML, quoteOptions, validTaxId, validEmail } from './editor/quote.js';
@@ -37,6 +38,7 @@ import { analyzeFloorplan, buildProject, estimateScale, loadImageData } from './
 
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+const THUMB_TRACE_KEY = 'interior-studio:thumb-trace'; // 寫實縮圖（光線追蹤）開關，預設關閉
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 function toast(msg) {
@@ -101,6 +103,40 @@ class App {
     this.openSharedFromUrl();
     // 在已開啟的分頁貼上分享連結時，只有 # 之後改變，頁面不會重新載入
     window.addEventListener('hashchange', () => { if (location.hash.startsWith('#share=')) this.openSharedFromUrl(); });
+    // 離開頁面或切到背景時立即停止光線追蹤並釋放顯示卡，讓「上一頁」等操作不被卡住
+    onPageHidden((why) => this.stopHeavyWork(why), () => this.resumeHeavyWork());
+    this.syncThumbTraceItem();
+  }
+
+  // why：'leave' 離開頁面（停止所有光線追蹤，包括寫實渲染）；'hidden' 切到背景
+  // （寫實渲染不中止：瀏覽器在背景本來就暫停它的畫面迴圈，顯示卡上最多只剩一小批工作）
+  stopHeavyWork(why) {
+    this.thumbRun = (this.thumbRun || 0) + 1; // 縮圖產生中止，並釋放縮圖用的顯示卡資源
+    this.view3d?.live?.suspend();
+    if (why === 'leave') this.studio?.stop();
+  }
+
+  resumeHeavyWork() {
+    // 縮圖還沒產生完時接著做（已完成的寫實縮圖存在快取，不會重算）
+    if (!this.thumbsDone) this.renderThumbnails();
+  }
+
+  // 寫實縮圖（光線追蹤重拍）：預設關閉，只用快速預覽；開啟後記住設定
+  thumbTraceOn() {
+    try { return localStorage.getItem(THUMB_TRACE_KEY) === 'on'; } catch { return false; }
+  }
+
+  toggleThumbTrace() {
+    const on = !this.thumbTraceOn();
+    try { localStorage.setItem(THUMB_TRACE_KEY, on ? 'on' : 'off'); } catch { /* 無法儲存時只在本次有效 */ }
+    this.syncThumbTraceItem();
+    if (on) { toast('寫實縮圖已開啟：閒置時以光線追蹤重拍家具與材質縮圖，完成的縮圖會存在瀏覽器'); this.renderThumbnails(); }
+    else { this.thumbRun = (this.thumbRun || 0) + 1; toast('寫實縮圖已關閉：只使用快速預覽（已算好的寫實縮圖仍會顯示）'); }
+  }
+
+  syncThumbTraceItem() {
+    const b = $('[data-action="thumbTrace"]');
+    if (b) b.textContent = `寫實縮圖（光線追蹤）：${this.thumbTraceOn() ? '開' : '關'}`;
   }
 
   // ------------------------------------------------------------ 版本與更新
@@ -239,6 +275,7 @@ class App {
   // 光線追蹤完成的縮圖存在瀏覽器，下次開啟直接使用。換風格時地板、牆面與家具配色跟著改變。
   async renderThumbnails() {
     const run = (this.thumbRun = (this.thumbRun || 0) + 1);
+    this.thumbsDone = false;
     const stale = () => run !== this.thumbRun;
     const styleId = store.project.design.styleId || '';
     const style = STYLE_MAP[styleId];
@@ -276,7 +313,7 @@ class App {
     if (stale()) return;
     const todo = [];
     for (const j of jobs) { if (cached.has(j.key)) apply(j, cached.get(j.key)); else todo.push(j); }
-    if (!todo.length) return;
+    if (!todo.length) { this.thumbsDone = true; return; }
     let studio;
     try { studio = new ThumbStudio({ floorId, wallId }); } catch { return; }
     const idle = () => new Promise((res) => (window.requestIdleCallback ? requestIdleCallback(() => res(), { timeout: 400 }) : setTimeout(res, 16)));
@@ -290,7 +327,8 @@ class App {
         await idle();
       }
       this.matPreviewDone = true;
-      // 3. 光線追蹤重拍
+      // 3. 光線追蹤重拍：預設關閉，使用者在「檔案 → 寫實縮圖」開啟後才進行
+      if (!this.thumbTraceOn()) { this.thumbsDone = true; return; }
       try { await studio.initTracer(); } catch (e) { console.warn('縮圖光線追蹤無法使用', e); return; }
       const samples = this.isMobileLayout() ? 48 : 128;
       const paused = () => !!this.studio?.running || !!this.view3d?.vr?.active || !!this.view3d?.live?.busy;
@@ -307,6 +345,7 @@ class App {
         apply(j, url);
         thumbCachePut(j.key, url);
       }
+      this.thumbsDone = true;
     } finally {
       studio.dispose();
     }
@@ -970,6 +1009,7 @@ class App {
         export3d: () => download(this.view3d.screenshot(), `${store.project.name}-3D.png`),
         checkUpdate: () => this.checkUpdateManually(),
         changelog: () => { e.preventDefault(); this.showChangelog(); },
+        thumbTrace: () => this.toggleThumbTrace(),
         undo: () => store.undo(),
         redo: () => store.redo(),
         detectAll: () => this.detectAllRooms(),
